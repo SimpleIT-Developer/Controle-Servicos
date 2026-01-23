@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, integer, decimal, date, timestamp, pgEnum, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, decimal, date, timestamp, pgEnum, uniqueIndex, index, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -9,8 +9,8 @@ export const contractStatusEnum = pgEnum("contract_status", ["active", "inactive
 export const chargedToEnum = pgEnum("charged_to", ["TENANT", "LANDLORD"]);
 export const receiptStatusEnum = pgEnum("receipt_status", ["draft", "closed", "paid", "transferred"]);
 export const transactionTypeEnum = pgEnum("transaction_type", ["IN", "OUT"]);
-export const transferStatusEnum = pgEnum("transfer_status", ["pending", "paid", "failed"]);
-export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "issued", "error"]);
+export const transferStatusEnum = pgEnum("transfer_status", ["pending", "paid", "failed", "reversed"]);
+export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "issued", "error", "cancelled"]);
 export const pixKeyTypeEnum = pgEnum("pix_key_type", ["cpf", "cnpj", "email", "phone", "random"]);
 
 export const users = pgTable("users", {
@@ -74,6 +74,7 @@ export const contracts = pgTable("contracts", {
   tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
   startDate: date("start_date").notNull(),
   endDate: date("end_date").notNull(),
+  firstDueDate: date("first_due_date"),
   dueDay: integer("due_day").notNull(),
   rentAmount: decimal("rent_amount", { precision: 10, scale: 2 }).notNull(),
   adminFeePercent: decimal("admin_fee_percent", { precision: 5, scale: 2 }).notNull(),
@@ -108,6 +109,7 @@ export const receipts = pgTable("receipts", {
   tenantTotalDue: decimal("tenant_total_due", { precision: 10, scale: 2 }).notNull(),
   landlordTotalDue: decimal("landlord_total_due", { precision: 10, scale: 2 }).notNull(),
   status: receiptStatusEnum("status").default("draft").notNull(),
+  isInvoiceIssued: boolean("is_invoice_issued").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   contractRefUnique: uniqueIndex("receipts_contract_ref_unique").on(table.contractId, table.refYear, table.refMonth),

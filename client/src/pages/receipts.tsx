@@ -82,6 +82,17 @@ export default function ReceiptsPage() {
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
 
+  const reversePaymentMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/reverse-payment`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
+      setIsDetailOpen(false);
+      toast({ title: "Sucesso", description: "Pagamento estornado com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
   const createTransferMutation = useMutation({
     mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/create-transfer`),
     onSuccess: () => {
@@ -97,8 +108,18 @@ export default function ReceiptsPage() {
     mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/create-invoice`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       setIsDetailOpen(false);
       toast({ title: "Sucesso", description: "Nota fiscal gerada com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const regenerateMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/regenerate`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ title: "Sucesso", description: "Recibo regerado com os valores atuais." });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -117,7 +138,7 @@ export default function ReceiptsPage() {
     setIsDetailOpen(true);
   };
 
-  const isPending = generateMutation.isPending || closeReceiptMutation.isPending || markPaidMutation.isPending || createTransferMutation.isPending;
+  const isPending = generateMutation.isPending || closeReceiptMutation.isPending || markPaidMutation.isPending || createTransferMutation.isPending || reversePaymentMutation.isPending || regenerateMutation.isPending;
 
   return (
     <div className="space-y-6">
@@ -192,14 +213,127 @@ export default function ReceiptsPage() {
                           R$ {Number(receipt.landlordTotalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                         </TableCell>
                         <TableCell>
-                          <Badge variant={statusLabels[receipt.status]?.variant || "secondary"}>
-                            {statusLabels[receipt.status]?.label || receipt.status}
-                          </Badge>
+                          <div className="flex flex-wrap gap-1">
+                            {receipt.status === 'draft' ? (
+                              <Badge variant="outline">Rascunho</Badge>
+                            ) : (
+                              <Badge variant="secondary">Fechado</Badge>
+                            )}
+                            
+                            {(receipt.status === 'paid' || receipt.status === 'transferred') && (
+                              <Badge variant="default" className="bg-green-600 hover:bg-green-700">Pago</Badge>
+                            )}
+                            
+                            {receipt.status === 'transferred' && (
+                              <Badge variant="default" className="bg-blue-600 hover:bg-blue-700">Repassado</Badge>
+                            )}
+
+                            {receipt.isInvoiceIssued && (
+                              <Badge variant="default" className="bg-purple-600 hover:bg-purple-700">NF Emitida</Badge>
+                            )}
+                          </div>
                         </TableCell>
-                        <TableCell className="text-right">
-                          <Button size="icon" variant="ghost" onClick={() => openDetail(receipt)} data-testid={`button-view-receipt-${receipt.id}`}>
+                        <TableCell className="text-right whitespace-nowrap">
+                          <Button size="icon" variant="ghost" onClick={() => openDetail(receipt)} title="Ver Detalhes">
                             <Eye className="h-4 w-4" />
                           </Button>
+
+                          {receipt.status === "draft" && (
+                            <>
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+                                onClick={() => regenerateMutation.mutate(receipt.id)} 
+                                disabled={isPending}
+                                title="Regerar Recibo (Atualizar Valores)"
+                              >
+                                <RefreshCw className="h-4 w-4" />
+                              </Button>
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                onClick={() => closeReceiptMutation.mutate(receipt.id)} 
+                                disabled={isPending}
+                                title="Fechar Recibo"
+                              >
+                                <Check className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
+
+                          {receipt.status === "closed" && (
+                            <>
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+                                onClick={() => regenerateMutation.mutate(receipt.id)} 
+                                disabled={isPending}
+                                title="Regerar Recibo (Atualizar Valores)"
+                              >
+                                <RefreshCw className="h-4 w-4" />
+                              </Button>
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                onClick={() => markPaidMutation.mutate(receipt.id)} 
+                                disabled={isPending}
+                                title="Marcar como Pago"
+                              >
+                                <DollarSign className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
+
+                          {(receipt.status === "paid" || receipt.status === "transferred") && (
+                            <>
+                              {receipt.status === "paid" && (
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost" 
+                                  className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                                  onClick={() => createTransferMutation.mutate(receipt.id)} 
+                                  disabled={isPending}
+                                  title="Gerar Repasse"
+                                >
+                                  <Send className="h-4 w-4" />
+                                </Button>
+                              )}
+
+                              {!receipt.isInvoiceIssued && (
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost" 
+                                  className="text-purple-600 hover:text-purple-700 hover:bg-purple-50"
+                                  onClick={() => createInvoiceMutation.mutate(receipt.id)} 
+                                  disabled={isPending}
+                                  title="Emitir NF"
+                                >
+                                  <FileCheck className="h-4 w-4" />
+                                </Button>
+                              )}
+
+                              {receipt.status === "paid" && (
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost" 
+                                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  onClick={() => {
+                                    if (confirm("Tem certeza que deseja estornar este recebimento? O lançamento no caixa será removido.")) {
+                                      reversePaymentMutation.mutate(receipt.id);
+                                    }
+                                  }} 
+                                  disabled={isPending}
+                                  title="Estornar Pagamento"
+                                >
+                                  <RefreshCw className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </>
+                          )}
                         </TableCell>
                       </TableRow>
                     );
@@ -281,30 +415,10 @@ export default function ReceiptsPage() {
             </div>
           )}
           <DialogFooter className="flex-wrap gap-2">
-            {selectedReceipt?.status === "draft" && (
-              <Button onClick={() => closeReceiptMutation.mutate(selectedReceipt.id)} disabled={isPending} data-testid="button-close-receipt">
-                <Check className="mr-2 h-4 w-4" />
-                Fechar Recibo
-              </Button>
-            )}
-            {selectedReceipt?.status === "closed" && (
-              <Button onClick={() => markPaidMutation.mutate(selectedReceipt.id)} disabled={isPending} data-testid="button-mark-paid">
-                <DollarSign className="mr-2 h-4 w-4" />
-                Marcar como Pago
-              </Button>
-            )}
-            {selectedReceipt?.status === "paid" && (
-              <>
-                <Button onClick={() => createTransferMutation.mutate(selectedReceipt.id)} disabled={isPending} variant="outline" data-testid="button-create-transfer">
-                  <Send className="mr-2 h-4 w-4" />
-                  Gerar Repasse
-                </Button>
-                <Button onClick={() => createInvoiceMutation.mutate(selectedReceipt.id)} disabled={isPending} variant="outline" data-testid="button-create-invoice">
-                  <FileCheck className="mr-2 h-4 w-4" />
-                  Emitir NF
-                </Button>
-              </>
-            )}
+            {/* As ações foram movidas para a grid para facilitar o acesso, mas mantemos o modal para visualização de detalhes */}
+            <Button variant="outline" onClick={() => setIsDetailOpen(false)}>
+              Fechar
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

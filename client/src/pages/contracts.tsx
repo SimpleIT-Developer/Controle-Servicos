@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, Search, FileText, Loader2, Calendar, DollarSign } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, FileText, Loader2, Calendar, DollarSign, FileMinus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -26,15 +26,17 @@ export default function ContractsPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const { toast } = useToast();
 
-  const { data: contracts, isLoading } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
+  const { data: contracts, isLoading, refetch } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
   const { data: properties } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
   const { data: landlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
   const { data: tenants } = useQuery<Tenant[]>({ queryKey: ["/api/tenants"] });
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => apiRequest("POST", "/api/contracts", data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/properties"] });
+      await refetch();
       setIsDialogOpen(false);
       toast({ title: "Sucesso", description: "Contrato cadastrado com sucesso." });
     },
@@ -43,8 +45,9 @@ export default function ContractsPage() {
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => apiRequest("PATCH", `/api/contracts/${id}`, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+      await refetch();
       setIsDialogOpen(false);
       setEditingContract(null);
       toast({ title: "Sucesso", description: "Contrato atualizado com sucesso." });
@@ -54,26 +57,76 @@ export default function ContractsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => apiRequest("DELETE", `/api/contracts/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+      await refetch();
       toast({ title: "Sucesso", description: "Contrato excluído com sucesso." });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
 
+  const deleteDraftReceiptsMutation = useMutation({
+    mutationFn: async (contractId: string) => apiRequest("DELETE", `/api/contracts/${contractId}/draft-receipts`),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ title: "Sucesso", description: "Recibos em rascunho excluídos com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const [formData, setFormData] = useState({
+    propertyId: "",
+    landlordId: "",
+    tenantId: "",
+    startDate: "",
+    endDate: "",
+    firstDueDate: "",
+    dueDay: 5,
+    rentAmount: "",
+    adminFeePercent: 10,
+    status: "active",
+  });
+
+  const handleEditClick = (contract: Contract) => {
+    setEditingContract(contract);
+    setFormData({
+      propertyId: contract.propertyId,
+      landlordId: contract.landlordId,
+      tenantId: contract.tenantId,
+      startDate: contract.startDate,
+      endDate: contract.endDate,
+      firstDueDate: contract.firstDueDate || "",
+      dueDay: contract.dueDay,
+      rentAmount: contract.rentAmount.toString(),
+      adminFeePercent: Number(contract.adminFeePercent),
+      status: contract.status,
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleNewClick = () => {
+    setEditingContract(null);
+    setFormData({
+      propertyId: "",
+      landlordId: "",
+      tenantId: "",
+      startDate: "",
+      endDate: "",
+      dueDay: 5,
+      rentAmount: "",
+      adminFeePercent: 10,
+      status: "active",
+    });
+    setIsDialogOpen(true);
+  };
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const formData = new FormData(e.currentTarget);
     const data = {
-      propertyId: formData.get("propertyId") as string,
-      landlordId: formData.get("landlordId") as string,
-      tenantId: formData.get("tenantId") as string,
-      startDate: formData.get("startDate") as string,
-      endDate: formData.get("endDate") as string,
-      dueDay: parseInt(formData.get("dueDay") as string),
-      rentAmount: formData.get("rentAmount") as string,
-      adminFeePercent: formData.get("adminFeePercent") as string,
-      status: formData.get("status") as string,
+      ...formData,
+      dueDay: Number(formData.dueDay),
+      rentAmount: formData.rentAmount,
+      adminFeePercent: formData.adminFeePercent.toString(),
     };
 
     if (editingContract) {
@@ -102,7 +155,7 @@ export default function ContractsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Contratos de Locação</h1>
           <p className="text-muted-foreground">Gerencie os contratos de aluguel</p>
         </div>
-        <Button onClick={() => { setEditingContract(null); setIsDialogOpen(true); }} data-testid="button-new-contract">
+        <Button onClick={handleNewClick} data-testid="button-new-contract">
           <Plus className="mr-2 h-4 w-4" />
           Novo Contrato
         </Button>
@@ -136,6 +189,7 @@ export default function ContractsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Imóvel</TableHead>
+                    <TableHead className="hidden md:table-cell">Locador</TableHead>
                     <TableHead className="hidden md:table-cell">Locatário</TableHead>
                     <TableHead className="hidden lg:table-cell">Período</TableHead>
                     <TableHead>Aluguel</TableHead>
@@ -148,6 +202,7 @@ export default function ContractsPage() {
                   {filteredContracts.map((contract) => (
                     <TableRow key={contract.id} data-testid={`row-contract-${contract.id}`}>
                       <TableCell className="font-medium">{getPropertyTitle(contract.propertyId)}</TableCell>
+                      <TableCell className="hidden md:table-cell">{getLandlordName(contract.landlordId)}</TableCell>
                       <TableCell className="hidden md:table-cell">{getTenantName(contract.tenantId)}</TableCell>
                       <TableCell className="hidden lg:table-cell">
                         <div className="flex items-center gap-1 text-sm">
@@ -169,8 +224,11 @@ export default function ContractsPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" onClick={() => { setEditingContract(contract); setIsDialogOpen(true); }}>
+                          <Button size="icon" variant="ghost" onClick={() => handleEditClick(contract)}>
                             <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button size="icon" variant="ghost" onClick={() => deleteDraftReceiptsMutation.mutate(contract.id)} title="Excluir Recibos em Rascunho">
+                            <FileMinus className="h-4 w-4 text-orange-500" />
                           </Button>
                           <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(contract.id)}>
                             <Trash2 className="h-4 w-4" />
@@ -198,10 +256,15 @@ export default function ContractsPage() {
             <DialogTitle>{editingContract ? "Editar Contrato" : "Novo Contrato"}</DialogTitle>
             <DialogDescription>{editingContract ? "Atualize os dados do contrato." : "Preencha os dados do novo contrato."}</DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form key={editingContract ? editingContract.id : 'new'} onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="propertyId">Imóvel *</Label>
-              <Select name="propertyId" defaultValue={editingContract?.propertyId || ""} required>
+              <Select
+                name="propertyId"
+                value={formData.propertyId}
+                onValueChange={(value) => setFormData({ ...formData, propertyId: value })}
+                required
+              >
                 <SelectTrigger data-testid="select-contract-property">
                   <SelectValue placeholder="Selecione o imóvel..." />
                 </SelectTrigger>
@@ -215,7 +278,12 @@ export default function ContractsPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="landlordId">Locador *</Label>
-                <Select name="landlordId" defaultValue={editingContract?.landlordId || ""} required>
+                <Select
+                  name="landlordId"
+                  value={formData.landlordId}
+                  onValueChange={(value) => setFormData({ ...formData, landlordId: value })}
+                  required
+                >
                   <SelectTrigger data-testid="select-contract-landlord">
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
@@ -228,7 +296,12 @@ export default function ContractsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="tenantId">Locatário *</Label>
-                <Select name="tenantId" defaultValue={editingContract?.tenantId || ""} required>
+                <Select
+                  name="tenantId"
+                  value={formData.tenantId}
+                  onValueChange={(value) => setFormData({ ...formData, tenantId: value })}
+                  required
+                >
                   <SelectTrigger data-testid="select-contract-tenant">
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
@@ -240,33 +313,93 @@ export default function ContractsPage() {
                 </Select>
               </div>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="startDate">Data Início *</Label>
-                <Input id="startDate" name="startDate" type="date" defaultValue={editingContract?.startDate || ""} required data-testid="input-contract-start" />
+                <Input
+                  id="startDate"
+                  name="startDate"
+                  type="date"
+                  value={formData.startDate}
+                  onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                  required
+                  data-testid="input-contract-start"
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="endDate">Data Fim *</Label>
-                <Input id="endDate" name="endDate" type="date" defaultValue={editingContract?.endDate || ""} required data-testid="input-contract-end" />
+                <Input
+                  id="endDate"
+                  name="endDate"
+                  type="date"
+                  value={formData.endDate}
+                  onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                  required
+                  data-testid="input-contract-end"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="firstDueDate">Primeiro Vencimento *</Label>
+                <Input
+                  id="firstDueDate"
+                  name="firstDueDate"
+                  type="date"
+                  value={formData.firstDueDate}
+                  onChange={(e) => setFormData({ ...formData, firstDueDate: e.target.value })}
+                  required
+                  data-testid="input-contract-first-due"
+                />
               </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="dueDay">Dia Vencimento *</Label>
-                <Input id="dueDay" name="dueDay" type="number" min="1" max="31" defaultValue={editingContract?.dueDay || 5} required data-testid="input-contract-due" />
+                <Input
+                  id="dueDay"
+                  name="dueDay"
+                  type="number"
+                  min="1"
+                  max="31"
+                  value={formData.dueDay}
+                  onChange={(e) => setFormData({ ...formData, dueDay: Number(e.target.value) })}
+                  required
+                  data-testid="input-contract-due"
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="rentAmount">Aluguel (R$) *</Label>
-                <Input id="rentAmount" name="rentAmount" type="number" step="0.01" defaultValue={editingContract?.rentAmount || ""} required data-testid="input-contract-rent" />
+                <Input
+                  id="rentAmount"
+                  name="rentAmount"
+                  type="number"
+                  step="0.01"
+                  value={formData.rentAmount}
+                  onChange={(e) => setFormData({ ...formData, rentAmount: e.target.value })}
+                  required
+                  data-testid="input-contract-rent"
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="adminFeePercent">Taxa Adm. (%) *</Label>
-                <Input id="adminFeePercent" name="adminFeePercent" type="number" step="0.01" defaultValue={editingContract?.adminFeePercent || 10} required data-testid="input-contract-fee" />
+                <Input
+                  id="adminFeePercent"
+                  name="adminFeePercent"
+                  type="number"
+                  step="0.01"
+                  value={formData.adminFeePercent}
+                  onChange={(e) => setFormData({ ...formData, adminFeePercent: Number(e.target.value) })}
+                  required
+                  data-testid="input-contract-fee"
+                />
               </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="status">Status *</Label>
-              <Select name="status" defaultValue={editingContract?.status || "active"}>
+              <Select
+                name="status"
+                value={formData.status}
+                onValueChange={(value) => setFormData({ ...formData, status: value })}
+              >
                 <SelectTrigger data-testid="select-contract-status">
                   <SelectValue placeholder="Selecione..." />
                 </SelectTrigger>

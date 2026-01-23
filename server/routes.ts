@@ -286,8 +286,14 @@ export async function registerRoutes(
     try {
       await storage.deleteProperty(req.params.id);
       res.json({ success: true });
-    } catch (error) {
+    } catch (error: any) {
+      if (error.code === '23503') {
+        return res.status(400).json({ 
+          error: "Não é possível excluir este imóvel pois existem registros vinculados a ele (contratos, etc)." 
+        });
+      }
       console.error("Delete property error:", error);
+      console.error("Error code:", error.code); // Debug log
       res.status(500).json({ error: "Erro ao excluir imóvel" });
     }
   });
@@ -330,6 +336,16 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Delete contract error:", error);
       res.status(500).json({ error: "Erro ao excluir contrato" });
+    }
+  });
+
+  app.delete("/api/contracts/:id/draft-receipts", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteDraftReceiptsByContractId(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete draft receipts error:", error);
+      res.status(500).json({ error: "Erro ao excluir recibos em rascunho" });
     }
   });
 
@@ -433,6 +449,50 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/receipts/:id/regenerate", requireAuth, async (req, res) => {
+    try {
+      const receipt = await storage.getReceipt(req.params.id);
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+      
+      if (receipt.status === "transferred" || receipt.status === "paid") {
+        return res.status(400).json({ error: "Não é possível regerar um recibo pago ou repassado. Faça o estorno primeiro." });
+      }
+
+      const contract = await storage.getContract(receipt.contractId);
+      if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
+
+      const contractServices = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
+      const servicesTenantTotal = contractServices
+        .filter((s) => s.chargedTo === "TENANT")
+        .reduce((sum, s) => sum + Number(s.amount), 0);
+      const servicesLandlordTotal = contractServices
+        .filter((s) => s.chargedTo === "LANDLORD")
+        .reduce((sum, s) => sum + Number(s.amount), 0);
+
+      const rentAmount = Number(contract.rentAmount);
+      const adminFeePercent = Number(contract.adminFeePercent);
+      const adminFeeAmount = (rentAmount * adminFeePercent) / 100;
+      const tenantTotalDue = rentAmount + servicesTenantTotal;
+      const landlordTotalDue = rentAmount - adminFeeAmount - servicesLandlordTotal;
+
+      const updated = await storage.updateReceipt(receipt.id, {
+        rentAmount: String(rentAmount),
+        adminFeePercent: String(adminFeePercent),
+        adminFeeAmount: String(adminFeeAmount),
+        servicesTenantTotal: String(servicesTenantTotal),
+        servicesLandlordTotal: String(servicesLandlordTotal),
+        tenantTotalDue: String(tenantTotalDue),
+        landlordTotalDue: String(landlordTotalDue),
+        // Mantém o status atual (draft ou closed)
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Regenerate receipt error:", error);
+      res.status(500).json({ error: "Erro ao regerar recibo" });
+    }
+  });
+
   app.post("/api/receipts/:id/close", requireAuth, async (req, res) => {
     try {
       const receipt = await storage.getReceipt(req.params.id);
@@ -471,6 +531,30 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/receipts/:id/reverse-payment", requireAuth, async (req, res) => {
+    try {
+      const receipt = await storage.getReceipt(req.params.id);
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+      if (receipt.status !== "paid") return res.status(400).json({ error: "Recibo não está pago" });
+
+      // Verificar se o recibo já foi repassado? 
+      // Se status é "paid", tecnicamente não está "transferred", mas vamos garantir que não há repasse em andamento/pago.
+      // Se houvesse repasse, o status do recibo seria "transferred" (ou o repasse estaria "pending"/"paid").
+      // Se o status é "paid", o repasse pode ter sido criado mas falhado, ou excluído, ou ainda não criado.
+      
+      // Vamos reverter para 'closed'
+      const updated = await storage.updateReceipt(req.params.id, { status: "closed" });
+
+      // Remover transação de entrada do caixa
+      await storage.deleteCashTransactionByReceiptAndType(receipt.id, "IN");
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Reverse payment error:", error);
+      res.status(500).json({ error: "Erro ao estornar pagamento" });
+    }
+  });
+
   app.post("/api/receipts/:id/create-transfer", requireAuth, async (req, res) => {
     try {
       const receipt = await storage.getReceipt(req.params.id);
@@ -498,7 +582,13 @@ export async function registerRoutes(
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      if (receipt.status !== "paid") return res.status(400).json({ error: "Recibo não está pago" });
+      if (receipt.status !== "paid" && receipt.status !== "transferred") {
+        return res.status(400).json({ error: "Recibo deve estar pago ou repassado para emitir NF" });
+      }
+
+      if (receipt.isInvoiceIssued) {
+        return res.status(400).json({ error: "Nota fiscal já emitida para este recibo" });
+      }
 
       const contract = await storage.getContract(receipt.contractId);
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
@@ -509,6 +599,8 @@ export async function registerRoutes(
         amount: receipt.rentAmount,
         status: "draft",
       });
+
+      await storage.updateReceipt(receipt.id, { isInvoiceIssued: true });
 
       res.json(invoice);
     } catch (error) {
@@ -619,6 +711,106 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/transfers/:id/manual", requireAuth, async (req, res) => {
+    try {
+      const transfer = await storage.getLandlordTransfer(req.params.id);
+      if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
+      if (transfer.status !== "pending") return res.status(400).json({ error: "Repasse não está pendente" });
+
+      const landlord = await storage.getLandlord(transfer.landlordId);
+      if (!landlord) return res.status(404).json({ error: "Locador não encontrado" });
+
+      const receipt = await storage.getReceipt(transfer.receiptId);
+
+      // Atualiza status do repasse
+      await storage.updateLandlordTransfer(transfer.id, {
+        status: "paid",
+        providerTransferId: "MANUAL-" + Date.now(), // ID fictício para controle
+      });
+
+      // Atualiza status do recibo
+      if (receipt) {
+        await storage.updateReceipt(receipt.id, { status: "transferred" });
+      }
+
+      // Cria lançamento no caixa
+      await storage.createCashTransaction({
+        type: "OUT",
+        date: new Date().toISOString().split("T")[0],
+        category: "Repasse ao Locador",
+        description: `Repasse Manual para ${landlord.name}`,
+        amount: transfer.amount,
+        receiptId: transfer.receiptId,
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Manual transfer error:", error);
+      res.status(500).json({ error: "Erro ao registrar repasse manual" });
+    }
+  });
+
+  app.post("/api/transfers/:id/reverse", requireAuth, async (req, res) => {
+    try {
+      const transfer = await storage.getLandlordTransfer(req.params.id);
+      if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
+      if (transfer.status !== "paid") return res.status(400).json({ error: "Apenas repasses pagos podem ser estornados" });
+
+      const landlord = await storage.getLandlord(transfer.landlordId);
+      const receipt = await storage.getReceipt(transfer.receiptId);
+
+      // 1. Reverte status do repasse para pendente (para permitir novo pagamento ou exclusão)
+      await storage.updateLandlordTransfer(transfer.id, {
+        status: "pending",
+      });
+
+      // 2. Reverte status do recibo para pago (se existir)
+      if (receipt) {
+        await storage.updateReceipt(receipt.id, { status: "paid" });
+        
+        // 3. Remove o lançamento do caixa (OUT) vinculado ao recibo
+        await storage.deleteCashTransactionByReceiptAndType(receipt.id, "OUT");
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Reverse transfer error:", error);
+      res.status(500).json({ error: "Erro ao estornar repasse" });
+    }
+  });
+
+  app.delete("/api/transfers/:id", requireAuth, async (req, res) => {
+    try {
+      const transfer = await storage.getLandlordTransfer(req.params.id);
+      if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
+
+      if (transfer.status !== "pending" && transfer.status !== "failed") {
+        return res.status(400).json({ 
+          error: "Apenas repasses pendentes ou com falha podem ser excluídos." 
+        });
+      }
+
+      // Salva o ID do recibo antes de excluir
+      const receiptId = transfer.receiptId;
+
+      await storage.deleteLandlordTransfer(req.params.id);
+
+      // Garante que o recibo volte para o status 'paid' se estiver 'transferred' (embora deva estar 'paid' se o repasse não foi concluído)
+      // Isso permite que um novo repasse seja gerado para este recibo
+      if (receiptId) {
+        const receipt = await storage.getReceipt(receiptId);
+        if (receipt && receipt.status === "transferred") {
+           await storage.updateReceipt(receiptId, { status: "paid" });
+        }
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Delete transfer error:", error);
+      res.status(500).json({ error: "Erro ao excluir repasse" });
+    }
+  });
+
   app.get("/api/invoices", requireAuth, async (req, res) => {
     try {
       const invoices = await storage.getInvoices();
@@ -653,6 +845,7 @@ export async function registerRoutes(
           providerInvoiceId: result.invoiceId,
           number: result.invoiceNumber,
         });
+        await storage.updateReceipt(invoice.receiptId, { isInvoiceIssued: true });
         res.json({ success: true, invoiceNumber: result.invoiceNumber });
       } else {
         await storage.updateInvoice(invoice.id, {
@@ -664,6 +857,50 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Issue invoice error:", error);
       res.status(500).json({ error: "Erro ao emitir nota fiscal" });
+    }
+  });
+
+  app.post("/api/invoices/:id/cancel", requireAuth, async (req, res) => {
+    try {
+      const invoice = await storage.getInvoice(req.params.id);
+      if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
+      if (invoice.status !== "issued") return res.status(400).json({ error: "Apenas notas fiscais emitidas podem ser canceladas" });
+
+      const result = await nfProvider.cancelInvoice(invoice.id, "Cancelamento solicitado pelo usuário");
+
+      if (result.success) {
+        await storage.updateInvoice(invoice.id, {
+          status: "cancelled",
+        });
+        res.json({ success: true });
+      } else {
+        res.status(400).json({ error: result.error || "Erro ao cancelar nota fiscal" });
+      }
+    } catch (error) {
+      console.error("Cancel invoice error:", error);
+      res.status(500).json({ error: "Erro ao cancelar nota fiscal" });
+    }
+  });
+
+  app.delete("/api/invoices/:id", requireAuth, async (req, res) => {
+    try {
+      const invoice = await storage.getInvoice(req.params.id);
+      if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
+
+      if (invoice.status === "issued") {
+        return res.status(400).json({ error: "Não é possível excluir uma nota fiscal já emitida." });
+      }
+
+      // Delete the invoice
+      await storage.deleteInvoice(req.params.id);
+
+      // Revert receipt status
+      await storage.updateReceipt(invoice.receiptId, { isInvoiceIssued: false });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete invoice error:", error);
+      res.status(500).json({ error: "Erro ao excluir nota fiscal" });
     }
   });
 

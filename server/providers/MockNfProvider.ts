@@ -5,9 +5,15 @@ export interface NfEmissionResult {
   error: string | null;
 }
 
+export interface NfCancellationResult {
+  success: boolean;
+  error: string | null;
+}
+
 export interface NfProvider {
   emitInvoice(landlordName: string, landlordDoc: string, amount: number, description: string): Promise<NfEmissionResult>;
-  getInvoiceStatus(invoiceId: string): Promise<{ status: "pending" | "issued" | "error"; error?: string }>;
+  cancelInvoice(invoiceId: string, reason: string): Promise<NfCancellationResult>;
+  getInvoiceStatus(invoiceId: string): Promise<{ status: "pending" | "issued" | "error" | "cancelled"; error?: string }>;
 }
 
 export class MockNfProvider implements NfProvider {
@@ -47,7 +53,13 @@ export class MockNfProvider implements NfProvider {
     }
   }
 
-  async getInvoiceStatus(invoiceId: string): Promise<{ status: "pending" | "issued" | "error"; error?: string }> {
+  async cancelInvoice(invoiceId: string, reason: string): Promise<NfCancellationResult> {
+    console.log(`[MockNF] Invoice cancellation requested:`, { invoiceId, reason });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return { success: true, error: null };
+  }
+
+  async getInvoiceStatus(invoiceId: string): Promise<{ status: "pending" | "issued" | "error" | "cancelled"; error?: string }> {
     console.log(`[MockNF] Checking status for: ${invoiceId}`);
     return { status: "issued" };
   }

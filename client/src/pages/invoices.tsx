@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Search, FileCheck, Loader2, Check, AlertCircle, FileText } from "lucide-react";
+import { Search, FileCheck, Loader2, Check, AlertCircle, FileText, Trash2, Ban } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,7 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
   draft: { label: "Rascunho", variant: "outline", icon: FileText },
   issued: { label: "Emitida", variant: "default", icon: Check },
   error: { label: "Erro", variant: "destructive", icon: AlertCircle },
+  cancelled: { label: "Cancelada", variant: "secondary", icon: Ban },
 };
 
 export default function InvoicesPage() {
@@ -31,7 +32,27 @@ export default function InvoicesPage() {
     mutationFn: async (id: string) => apiRequest("POST", `/api/invoices/${id}/issue`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       toast({ title: "Sucesso", description: "Nota fiscal emitida com sucesso (mock)." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const deleteInvoiceMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("DELETE", `/api/invoices/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ title: "Sucesso", description: "Nota fiscal excluída com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const cancelInvoiceMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/invoices/${id}/cancel`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({ title: "Sucesso", description: "Nota fiscal cancelada com sucesso." });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -153,19 +174,58 @@ export default function InvoicesPage() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">
-                          {invoice.status === "draft" && (
-                            <Button
-                              size="sm"
-                              onClick={() => issueInvoiceMutation.mutate(invoice.id)}
-                              disabled={issueInvoiceMutation.isPending}
-                              data-testid={`button-issue-invoice-${invoice.id}`}
-                            >
-                              {issueInvoiceMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCheck className="mr-2 h-4 w-4" />}
-                              Emitir NF
-                            </Button>
-                          )}
+                          <div className="flex justify-end gap-2">
+                            {invoice.status === "draft" && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  onClick={() => issueInvoiceMutation.mutate(invoice.id)}
+                                  disabled={issueInvoiceMutation.isPending}
+                                  data-testid={`button-issue-invoice-${invoice.id}`}
+                                >
+                                  {issueInvoiceMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCheck className="mr-2 h-4 w-4" />}
+                                  Emitir NF
+                                </Button>
+                              </>
+                            )}
+                            
+                            {invoice.status === "issued" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-orange-600 hover:text-orange-700 hover:bg-orange-50 border-orange-200"
+                                onClick={() => {
+                                  if (confirm("Tem certeza que deseja cancelar esta nota fiscal?")) {
+                                    cancelInvoiceMutation.mutate(invoice.id);
+                                  }
+                                }}
+                                disabled={cancelInvoiceMutation.isPending}
+                                title="Cancelar NF"
+                              >
+                                {cancelInvoiceMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Ban className="mr-2 h-4 w-4" />}
+                                Cancelar
+                              </Button>
+                            )}
+
+                            {["draft", "error", "cancelled"].includes(invoice.status) && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                onClick={() => {
+                                  if (confirm("Tem certeza que deseja excluir esta nota fiscal?")) {
+                                    deleteInvoiceMutation.mutate(invoice.id);
+                                  }
+                                }}
+                                disabled={deleteInvoiceMutation.isPending}
+                                title="Excluir NF"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
                           {invoice.status === "error" && invoice.errorMessage && (
-                            <span className="text-xs text-destructive">{invoice.errorMessage}</span>
+                            <span className="text-xs text-destructive block mt-1">{invoice.errorMessage}</span>
                           )}
                         </TableCell>
                       </TableRow>

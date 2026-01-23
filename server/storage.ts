@@ -15,6 +15,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc } from "drizzle-orm";
+import { MemStorage } from "./mem_storage";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -65,22 +66,26 @@ export interface IStorage {
   getReceiptByContractAndRef(contractId: string, year: number, month: number): Promise<Receipt | undefined>;
   createReceipt(data: InsertReceipt): Promise<Receipt>;
   updateReceipt(id: string, data: Partial<InsertReceipt>): Promise<Receipt | undefined>;
+  deleteDraftReceiptsByContractId(contractId: string): Promise<void>;
 
   getCashTransactions(): Promise<CashTransaction[]>;
   getCashTransaction(id: string): Promise<CashTransaction | undefined>;
   createCashTransaction(data: InsertCashTransaction): Promise<CashTransaction>;
   updateCashTransaction(id: string, data: Partial<InsertCashTransaction>): Promise<CashTransaction | undefined>;
   deleteCashTransaction(id: string): Promise<void>;
+  deleteCashTransactionByReceiptAndType(receiptId: string, type: "IN" | "OUT"): Promise<void>;
 
   getLandlordTransfers(): Promise<LandlordTransfer[]>;
   getLandlordTransfer(id: string): Promise<LandlordTransfer | undefined>;
   createLandlordTransfer(data: InsertLandlordTransfer): Promise<LandlordTransfer>;
   updateLandlordTransfer(id: string, data: Partial<InsertLandlordTransfer>): Promise<LandlordTransfer | undefined>;
+  deleteLandlordTransfer(id: string): Promise<void>;
 
   getInvoices(): Promise<Invoice[]>;
   getInvoice(id: string): Promise<Invoice | undefined>;
   createInvoice(data: InsertInvoice): Promise<Invoice>;
   updateInvoice(id: string, data: Partial<InsertInvoice>): Promise<Invoice | undefined>;
+  deleteInvoice(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -206,6 +211,10 @@ export class DatabaseStorage implements IStorage {
 
   async createContract(data: InsertContract): Promise<Contract> {
     const [contract] = await db.insert(contracts).values(data).returning();
+    await db
+      .update(properties)
+      .set({ status: "rented" })
+      .where(eq(properties.id, data.propertyId));
     return contract;
   }
 
@@ -279,6 +288,15 @@ export class DatabaseStorage implements IStorage {
     return receipt || undefined;
   }
 
+  async deleteDraftReceiptsByContractId(contractId: string): Promise<void> {
+    await db.delete(receipts).where(
+      and(
+        eq(receipts.contractId, contractId),
+        eq(receipts.status, "draft")
+      )
+    );
+  }
+
   async getCashTransactions(): Promise<CashTransaction[]> {
     return db.select().from(cashTransactions).orderBy(desc(cashTransactions.date));
   }
@@ -302,6 +320,15 @@ export class DatabaseStorage implements IStorage {
     await db.delete(cashTransactions).where(eq(cashTransactions.id, id));
   }
 
+  async deleteCashTransactionByReceiptAndType(receiptId: string, type: "IN" | "OUT"): Promise<void> {
+    await db.delete(cashTransactions).where(
+      and(
+        eq(cashTransactions.receiptId, receiptId),
+        eq(cashTransactions.type, type)
+      )
+    );
+  }
+
   async getLandlordTransfers(): Promise<LandlordTransfer[]> {
     return db.select().from(landlordTransfers).orderBy(desc(landlordTransfers.createdAt));
   }
@@ -319,6 +346,10 @@ export class DatabaseStorage implements IStorage {
   async updateLandlordTransfer(id: string, data: Partial<InsertLandlordTransfer>): Promise<LandlordTransfer | undefined> {
     const [transfer] = await db.update(landlordTransfers).set(data).where(eq(landlordTransfers.id, id)).returning();
     return transfer || undefined;
+  }
+
+  async deleteLandlordTransfer(id: string): Promise<void> {
+    await db.delete(landlordTransfers).where(eq(landlordTransfers.id, id));
   }
 
   async getInvoices(): Promise<Invoice[]> {
@@ -339,6 +370,10 @@ export class DatabaseStorage implements IStorage {
     const [invoice] = await db.update(invoices).set(data).where(eq(invoices.id, id)).returning();
     return invoice || undefined;
   }
+
+  async deleteInvoice(id: string): Promise<void> {
+    await db.delete(invoices).where(eq(invoices.id, id));
+  }
 }
 
-export const storage = new DatabaseStorage();
+export const storage = process.env.DATABASE_URL ? new DatabaseStorage() : new MemStorage();

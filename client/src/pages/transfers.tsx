@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Search, Send, Loader2, Check, AlertCircle, Clock } from "lucide-react";
+import { Search, Send, Loader2, Check, AlertCircle, Clock, Trash2, RotateCcw, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,7 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
   pending: { label: "Pendente", variant: "outline", icon: Clock },
   paid: { label: "Pago", variant: "default", icon: Check },
   failed: { label: "Falhou", variant: "destructive", icon: AlertCircle },
+  reversed: { label: "Estornado", variant: "secondary", icon: RotateCcw },
 };
 
 export default function TransfersPage() {
@@ -34,6 +35,40 @@ export default function TransfersPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       toast({ title: "Sucesso", description: "Repasse executado com sucesso (mock)." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const manualTransferMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/transfers/${id}/manual`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ title: "Sucesso", description: "Repasse manual registrado com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const deleteTransferMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("DELETE", `/api/transfers/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      toast({ title: "Sucesso", description: "Repasse excluído com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const reverseTransferMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/transfers/${id}/reverse`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      toast({ title: "Sucesso", description: "Repasse estornado com sucesso." });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -160,19 +195,68 @@ export default function TransfersPage() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">
-                          {transfer.status === "pending" && (
-                            <Button
-                              size="sm"
-                              onClick={() => executeTransferMutation.mutate(transfer.id)}
-                              disabled={executeTransferMutation.isPending}
-                              data-testid={`button-execute-transfer-${transfer.id}`}
-                            >
-                              {executeTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                              Executar PIX
-                            </Button>
-                          )}
+                          <div className="flex justify-end gap-2 items-center">
+                            {transfer.status === "pending" && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  onClick={() => executeTransferMutation.mutate(transfer.id)}
+                                  disabled={executeTransferMutation.isPending || manualTransferMutation.isPending}
+                                  data-testid={`button-execute-transfer-${transfer.id}`}
+                                >
+                                  {executeTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                                  Executar PIX
+                                </Button>
+
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() => manualTransferMutation.mutate(transfer.id)}
+                                  disabled={executeTransferMutation.isPending || manualTransferMutation.isPending}
+                                  data-testid={`button-manual-transfer-${transfer.id}`}
+                                >
+                                  {manualTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wallet className="mr-2 h-4 w-4" />}
+                                  Pagamento Manual
+                                </Button>
+                              </>
+                            )}
+
+                            {transfer.status === "paid" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  if (confirm("Tem certeza que deseja estornar este repasse? Isso irá reverter o status do recibo e criar uma entrada no caixa.")) {
+                                    reverseTransferMutation.mutate(transfer.id);
+                                  }
+                                }}
+                                disabled={reverseTransferMutation.isPending}
+                                title="Estornar repasse"
+                              >
+                                {reverseTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+                                Estornar
+                              </Button>
+                            )}
+                            
+                            {(transfer.status === "pending" || transfer.status === "failed") && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                onClick={() => {
+                                  if (confirm("Tem certeza que deseja excluir este repasse?")) {
+                                    deleteTransferMutation.mutate(transfer.id);
+                                  }
+                                }}
+                                disabled={deleteTransferMutation.isPending}
+                                title="Excluir repasse"
+                              >
+                                {deleteTransferMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                              </Button>
+                            )}
+                          </div>
                           {transfer.status === "failed" && transfer.errorMessage && (
-                            <span className="text-xs text-destructive">{transfer.errorMessage}</span>
+                            <div className="text-xs text-destructive mt-1">{transfer.errorMessage}</div>
                           )}
                         </TableCell>
                       </TableRow>
