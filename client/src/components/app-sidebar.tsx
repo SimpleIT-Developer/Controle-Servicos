@@ -1,4 +1,4 @@
-import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut } from "lucide-react";
+import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import {
   Sidebar,
@@ -17,8 +17,9 @@ import { useAuth } from "@/hooks/use-auth";
 const menuItems = [
   { title: "Dashboard", url: "/", icon: Home },
   { title: "Imóveis", url: "/properties", icon: Building2 },
-  { title: "Locadores", url: "/landlords", icon: Users },
+  { title: "Proprietários", url: "/landlords", icon: Users },
   { title: "Locatários", url: "/tenants", icon: UserCheck },
+  { title: "Fiadores", url: "/guarantors", icon: ShieldCheck },
   { title: "Prestadores", url: "/providers", icon: Wrench },
   { title: "Contratos", url: "/contracts", icon: FileText },
   { title: "Serviços", url: "/services", icon: Wrench },
@@ -29,6 +30,17 @@ const financialItems = [
   { title: "Caixa", url: "/cash", icon: DollarSign },
   { title: "Repasses", url: "/transfers", icon: Send },
   { title: "Notas Fiscais", url: "/invoices", icon: FileCheck },
+  { title: "Ajustes", url: "/adjustments", icon: ArrowUpDown },
+  { title: "Config. NFS-e", url: "/nfse/config", icon: Settings },
+];
+
+const reportItems = [
+  { title: "Repasse", url: "/reports/landlord-transfers", icon: BarChart },
+  { title: "Receita", url: "/reports/revenue", icon: TrendingUp },
+];
+
+const systemItems = [
+  { title: "Logs do Sistema", url: "/system/logs", icon: ScrollText },
 ];
 
 export function AppSidebar() {
@@ -71,6 +83,40 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {financialItems.map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton asChild isActive={location === item.url}>
+                    <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>
+                      <item.icon className="h-4 w-4" />
+                      <span>{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-sidebar-foreground/50">Relatórios</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {reportItems.map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton asChild isActive={location === item.url}>
+                    <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>
+                      <item.icon className="h-4 w-4" />
+                      <span>{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-sidebar-foreground/50">Sistema</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {systemItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild isActive={location === item.url}>
                     <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>

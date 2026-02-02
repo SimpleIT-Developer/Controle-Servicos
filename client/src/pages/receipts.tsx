@@ -1,19 +1,26 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Receipt, Search, Loader2, Check, DollarSign, Send, FileCheck, RefreshCw, Eye } from "lucide-react";
+import { Receipt, Search, Loader2, Check, DollarSign, Send, FileCheck, RefreshCw, Eye, AlertCircle, RotateCcw, Printer, Plus, Barcode, XCircle, Trash2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Receipt as ReceiptType, Contract, Property, Tenant, Landlord } from "@shared/schema";
+import type { Receipt as ReceiptType, Contract, Property, Tenant, Landlord, Service, ServiceProvider } from "@shared/schema";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   draft: { label: "Rascunho", variant: "outline" },
@@ -21,6 +28,401 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
   paid: { label: "Pago", variant: "default" },
   transferred: { label: "Repassado", variant: "default" },
 };
+
+function AddServiceDialog({ 
+  contractId, 
+  year, 
+  month, 
+  onSuccess,
+  serviceToEdit,
+  trigger
+}: { 
+  contractId: string, 
+  year: number, 
+  month: number, 
+  onSuccess: () => void,
+  serviceToEdit?: Service,
+  trigger?: React.ReactNode
+}) {
+  const [open, setOpen] = useState(false);
+  const [type, setType] = useState<"service" | "adjustment">("adjustment");
+  const [description, setDescription] = useState("");
+  const [amount, setAmount] = useState("");
+  const [chargedTo, setChargedTo] = useState<"TENANT" | "LANDLORD">("TENANT");
+  const [passThrough, setPassThrough] = useState(false);
+  const [providerId, setProviderId] = useState<string>("");
+  const { toast } = useToast();
+
+  useEffect(() => {
+    if (open) {
+      if (serviceToEdit) {
+        setType(serviceToEdit.providerId ? "service" : "adjustment");
+        setDescription(serviceToEdit.description);
+        setAmount(serviceToEdit.amount.toString());
+        setChargedTo(serviceToEdit.chargedTo as "TENANT" | "LANDLORD");
+        setPassThrough(serviceToEdit.passThrough);
+        setProviderId(serviceToEdit.providerId || "");
+      } else {
+        // Reset for add mode
+        setType("adjustment");
+        setDescription("");
+        setAmount("");
+        setChargedTo("TENANT");
+        setPassThrough(false);
+        setProviderId("");
+      }
+    }
+  }, [open, serviceToEdit]);
+
+  const { data: providers } = useQuery<ServiceProvider[]>({ 
+    queryKey: ["/api/providers"],
+    enabled: open && type === "service"
+  });
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const data = {
+        contractId,
+        description,
+        amount: Number(amount),
+        chargedTo,
+        passThrough,
+        refYear: year,
+        refMonth: month,
+        providerId: type === "service" ? providerId : null,
+        type: type === "service" ? "service" : "adjustment"
+      };
+      
+      if (serviceToEdit) {
+        return apiRequest("PATCH", `/api/services/${serviceToEdit.id}`, data);
+      } else {
+        return apiRequest("POST", "/api/services", data);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["contract-services"] });
+      setOpen(false);
+      if (!serviceToEdit) {
+        setDescription("");
+        setAmount("");
+        setProviderId("");
+      }
+      onSuccess();
+      toast({ 
+        title: "Sucesso", 
+        description: serviceToEdit ? "Item atualizado com sucesso." : "Item adicionado com sucesso." 
+      });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    mutation.mutate();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        {trigger || (
+          <Button variant="outline" size="sm" className="h-8 gap-1">
+            <Plus className="h-3 w-3" />
+            Adicionar Item
+          </Button>
+        )}
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle>{serviceToEdit ? "Editar Item" : "Adicionar Item ao Recibo"}</DialogTitle>
+          <DialogDescription>
+            {serviceToEdit ? "Edite os detalhes do serviço ou ajuste." : "Adicione um serviço ou ajuste para este mês. Será necessário regerar o recibo."}
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4 py-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Tipo</Label>
+              <Select value={type} onValueChange={(v: any) => setType(v)} disabled={!!serviceToEdit}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="adjustment">Ajuste (Crédito/Débito)</SelectItem>
+                  <SelectItem value="service">Serviço (Com Prestador)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Valor (R$)</Label>
+              <Input 
+                type="number" 
+                step="0.01" 
+                value={amount} 
+                onChange={e => setAmount(e.target.value)} 
+                required 
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Descrição</Label>
+            <Input 
+              value={description} 
+              onChange={e => setDescription(e.target.value)} 
+              placeholder={type === "service" ? "Ex: Manutenção Elétrica" : "Ex: Desconto Acordado"}
+              required 
+            />
+          </div>
+
+          {type === "service" && (
+            <div className="space-y-2">
+              <Label>Prestador</Label>
+              <Select value={providerId} onValueChange={setProviderId} required={type === "service"}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione o prestador" />
+                </SelectTrigger>
+                <SelectContent>
+                  {providers?.map(p => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Cobrar de</Label>
+              <Select value={chargedTo} onValueChange={(v: any) => setChargedTo(v)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="TENANT">Locatário</SelectItem>
+                  <SelectItem value="LANDLORD">Proprietário</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="flex items-center space-x-2 pt-8">
+              <Checkbox 
+                id="passThrough" 
+                checked={passThrough} 
+                onCheckedChange={(c) => setPassThrough(!!c)} 
+              />
+              <Label htmlFor="passThrough" className="cursor-pointer">
+                Repassar valor?
+              </Label>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Salvar
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Componente para exibir os detalhes dos serviços/ajustes
+function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenantTotal, storedLandlordTotal }: { 
+  receiptId: string, 
+  contractId: string, 
+  year: number, 
+  month: number,
+  storedTenantTotal: number,
+  storedLandlordTotal: number
+}) {
+  const { data: services, isLoading } = useQuery<Service[]>({
+    queryKey: ["contract-services", contractId, year, month],
+    queryFn: async () => {
+      const res = await fetch(`/api/contracts/${contractId}/services/${year}/${month}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch services");
+      return res.json();
+    },
+    enabled: !!contractId && !!year && !!month,
+  });
+
+  const { toast } = useToast();
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("DELETE", `/api/services/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["contract-services"] });
+      toast({ title: "Sucesso", description: "Item removido com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  if (isLoading) return <div className="py-2 text-center text-sm text-muted-foreground">Carregando detalhes...</div>;
+
+  // Calculate totals regardless of whether services exist (for mismatch check)
+  const liveTenantTotal = (services || [])
+    .filter(s => s.chargedTo === "TENANT")
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+    
+  const liveLandlordTotal = (services || [])
+    .filter(s => s.chargedTo === "LANDLORD")
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const hasMismatch = 
+    Math.abs(liveTenantTotal - storedTenantTotal) > 0.01 || 
+    Math.abs(liveLandlordTotal - storedLandlordTotal) > 0.01;
+
+  const providerServices = services?.filter(s => !!s.providerId) || [];
+  const adjustments = services?.filter(s => !s.providerId) || [];
+
+  return (
+    <div className="space-y-4 pt-2">
+      <div className="flex justify-between items-center border-b pb-1">
+        <h4 className="text-sm font-medium text-muted-foreground">Serviços e Ajustes</h4>
+        <AddServiceDialog 
+          contractId={contractId} 
+          year={year} 
+          month={month} 
+          onSuccess={() => {
+            // Optional: trigger anything else needed on success
+          }} 
+        />
+      </div>
+
+      {hasMismatch && (
+        <div className="rounded-md bg-yellow-50 p-3 text-sm text-yellow-800 border border-yellow-200 flex items-center gap-2">
+          <AlertCircle className="h-4 w-4" />
+          <span>
+            Os valores dos serviços mudaram. <strong>Regere o recibo</strong> para atualizar os totais.
+          </span>
+        </div>
+      )}
+
+      {(!services || services.length === 0) && (
+        <p className="text-sm text-muted-foreground py-4 text-center">Nenhum serviço ou ajuste lançado para este mês.</p>
+      )}
+
+      {providerServices.length > 0 && (
+        <div className="space-y-2">
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase">Serviços / Contas</h4>
+          <Table>
+            <TableHeader>
+              <TableRow className="h-8 hover:bg-transparent">
+                <TableHead className="h-8 py-0 pl-2">Descrição</TableHead>
+                <TableHead className="h-8 py-0 w-[100px]">Cobrar de</TableHead>
+                <TableHead className="h-8 py-0 w-[140px] whitespace-nowrap">Repassar para</TableHead>
+                <TableHead className="h-8 py-0 text-right w-[100px]">Valor</TableHead>
+                <TableHead className="h-8 py-0 w-[70px]"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {providerServices.map(service => (
+                <TableRow key={service.id} className="h-8 group">
+                  <TableCell className="py-1 pl-2 font-medium">{service.description}</TableCell>
+                  <TableCell className="py-1">
+                    <Badge variant="outline" className="text-[10px] h-5 px-1 font-normal">
+                      {service.chargedTo === "TENANT" ? "Locatário" : "Proprietário"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="py-1">
+                    {service.passThrough && (
+                      <Badge variant="secondary" className="text-[10px] h-5 px-1 font-normal bg-blue-50 text-blue-700 hover:bg-blue-100">
+                        {service.chargedTo === "TENANT" ? "Proprietário" : "Locatário"}
+                      </Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className="py-1 text-right font-medium">
+                    R$ {Number(service.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                  </TableCell>
+                  <TableCell className="py-1 text-right flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                    <AddServiceDialog 
+                      contractId={contractId} 
+                      year={year} 
+                      month={month} 
+                      onSuccess={() => {}}
+                      serviceToEdit={service}
+                      trigger={
+                        <Button variant="ghost" size="icon" className="h-6 w-6 mr-1" title="Editar">
+                          <Pencil className="h-3 w-3 text-muted-foreground hover:text-primary" />
+                        </Button>
+                      }
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => deleteMutation.mutate(service.id)}
+                      disabled={deleteMutation.isPending}
+                      title="Excluir"
+                    >
+                      <Trash2 className="h-3 w-3 text-destructive" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {adjustments.length > 0 && (
+        <div className="space-y-2">
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase">Ajustes / Créditos / Débitos</h4>
+          <Table>
+            <TableHeader>
+              <TableRow className="h-8 hover:bg-transparent">
+                <TableHead className="h-8 py-0 pl-2">Descrição</TableHead>
+                <TableHead className="h-8 py-0 w-[100px] whitespace-nowrap">Aplicar em</TableHead>
+                <TableHead className="h-8 py-0 text-right w-[100px]">Valor</TableHead>
+                <TableHead className="h-8 py-0 w-[70px]"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {adjustments.map(adj => (
+                <TableRow key={adj.id} className="h-8 group">
+                  <TableCell className="py-1 pl-2 font-medium">{adj.description}</TableCell>
+                  <TableCell className="py-1">
+                    <Badge variant="outline" className="text-[10px] h-5 px-1 font-normal">
+                      {adj.chargedTo === "TENANT" ? "Locatário" : "Proprietário"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className={`py-1 text-right font-medium ${Number(adj.amount) < 0 ? "text-green-600" : "text-red-600"}`}>
+                    R$ {Number(adj.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                  </TableCell>
+                  <TableCell className="py-1 text-right flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                    <AddServiceDialog 
+                      contractId={contractId} 
+                      year={year} 
+                      month={month} 
+                      onSuccess={() => {}}
+                      serviceToEdit={adj}
+                      trigger={
+                        <Button variant="ghost" size="icon" className="h-6 w-6 mr-1" title="Editar">
+                          <Pencil className="h-3 w-3 text-muted-foreground hover:text-primary" />
+                        </Button>
+                      }
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => deleteMutation.mutate(adj.id)}
+                      disabled={deleteMutation.isPending}
+                      title="Excluir"
+                    >
+                      <Trash2 className="h-3 w-3 text-destructive" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const months = [
   { value: "1", label: "Janeiro" }, { value: "2", label: "Fevereiro" }, { value: "3", label: "Março" },
@@ -39,7 +441,7 @@ export default function ReceiptsPage() {
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const { toast } = useToast();
 
-  const { data: receipts, isLoading } = useQuery<ReceiptType[]>({ 
+  const { data: receipts, isLoading } = useQuery<(ReceiptType & { outdated?: boolean; hasTransfer?: boolean })[]>({ 
     queryKey: ["/api/receipts", filterYear, filterMonth],
     queryFn: async () => {
       const res = await fetch(`/api/receipts?year=${filterYear}&month=${filterMonth}`, { credentials: "include" });
@@ -119,7 +521,35 @@ export default function ReceiptsPage() {
     mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/regenerate`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["contract-services"] });
       toast({ title: "Sucesso", description: "Recibo regerado com os valores atuais." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const reopenReceiptMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/reopen`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ title: "Sucesso", description: "Recibo reaberto (rascunho)." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const createSlipMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/emit-slip`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ title: "Sucesso", description: "Boleto emitido com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const cancelSlipMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/cancel-slip`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ title: "Sucesso", description: "Boleto cancelado com sucesso." });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -138,7 +568,7 @@ export default function ReceiptsPage() {
     setIsDetailOpen(true);
   };
 
-  const isPending = generateMutation.isPending || closeReceiptMutation.isPending || markPaidMutation.isPending || createTransferMutation.isPending || reversePaymentMutation.isPending || regenerateMutation.isPending;
+  const isPending = generateMutation.isPending || closeReceiptMutation.isPending || markPaidMutation.isPending || createTransferMutation.isPending || reversePaymentMutation.isPending || regenerateMutation.isPending || reopenReceiptMutation.isPending || createSlipMutation.isPending || cancelSlipMutation.isPending;
 
   return (
     <div className="space-y-6">
@@ -193,7 +623,7 @@ export default function ReceiptsPage() {
                     <TableHead className="hidden md:table-cell">Locatário</TableHead>
                     <TableHead>Aluguel</TableHead>
                     <TableHead>Total Locatário</TableHead>
-                    <TableHead className="hidden lg:table-cell">Total Locador</TableHead>
+                    <TableHead className="hidden lg:table-cell">Total Proprietário</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Ações</TableHead>
                   </TableRow>
@@ -213,23 +643,54 @@ export default function ReceiptsPage() {
                           R$ {Number(receipt.landlordTotalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                         </TableCell>
                         <TableCell>
-                          <div className="flex flex-wrap gap-1">
-                            {receipt.status === 'draft' ? (
-                              <Badge variant="outline">Rascunho</Badge>
-                            ) : (
-                              <Badge variant="secondary">Fechado</Badge>
-                            )}
-                            
-                            {(receipt.status === 'paid' || receipt.status === 'transferred') && (
-                              <Badge variant="default" className="bg-green-600 hover:bg-green-700">Pago</Badge>
+                          <div className="flex flex-wrap gap-1 items-center">
+                            {receipt.outdated && (
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <div className="bg-yellow-100 text-yellow-700 p-1 rounded-full cursor-help mr-1">
+                                      <AlertCircle className="h-4 w-4" />
+                                    </div>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Valores desatualizados. Regere o recibo.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
                             )}
                             
                             {receipt.status === 'transferred' && (
-                              <Badge variant="default" className="bg-blue-600 hover:bg-blue-700">Repassado</Badge>
+                              <Badge 
+                                variant="default"
+                                className="bg-green-600 hover:bg-green-700 mr-1"
+                              >
+                                Pago
+                              </Badge>
+                            )}
+                            <Badge 
+                              variant={statusLabels[receipt.status]?.variant || "outline"}
+                              className={
+                                receipt.status === 'paid' ? "bg-green-600 hover:bg-green-700" :
+                                receipt.status === 'transferred' ? "bg-blue-600 hover:bg-blue-700" : ""
+                              }
+                            >
+                              {statusLabels[receipt.status]?.label || receipt.status}
+                            </Badge>
+
+                            {receipt.isSlipIssued && (
+                              <Badge variant="default" className="bg-indigo-600 hover:bg-indigo-700">Boleto Emitido</Badge>
                             )}
 
                             {receipt.isInvoiceIssued && (
                               <Badge variant="default" className="bg-purple-600 hover:bg-purple-700">NF Emitida</Badge>
+                            )}
+
+                            {receipt.isInvoiceCancelled && !receipt.isInvoiceIssued && !receipt.isInvoiceGenerated && (
+                              <Badge variant="destructive">NF Cancelada</Badge>
+                            )}
+                            
+                            {!receipt.isInvoiceIssued && receipt.isInvoiceGenerated && (
+                              <Badge variant="outline" className="text-purple-600 border-purple-200 bg-purple-50">NF Gerada</Badge>
                             )}
                           </div>
                         </TableCell>
@@ -263,8 +724,18 @@ export default function ReceiptsPage() {
                             </>
                           )}
 
-                          {receipt.status === "closed" && (
+                          {receipt.status === "closed" && !receipt.isInvoiceGenerated && !receipt.isInvoiceIssued && !receipt.isInvoiceCancelled && (
                             <>
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50"
+                                onClick={() => reopenReceiptMutation.mutate(receipt.id)} 
+                                disabled={isPending}
+                                title="Voltar para Rascunho"
+                              >
+                                <RotateCcw className="h-4 w-4" />
+                              </Button>
                               <Button 
                                 size="icon" 
                                 variant="ghost" 
@@ -285,12 +756,36 @@ export default function ReceiptsPage() {
                               >
                                 <DollarSign className="h-4 w-4" />
                               </Button>
+
+                              {!receipt.isSlipIssued ? (
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost" 
+                                  className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
+                                  onClick={() => createSlipMutation.mutate(receipt.id)} 
+                                  disabled={isPending}
+                                  title="Emitir Boleto"
+                                >
+                                  <Barcode className="h-4 w-4" />
+                                </Button>
+                              ) : (
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost" 
+                                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                  onClick={() => cancelSlipMutation.mutate(receipt.id)} 
+                                  disabled={isPending}
+                                  title="Cancelar Boleto"
+                                >
+                                  <XCircle className="h-4 w-4" />
+                                </Button>
+                              )}
                             </>
                           )}
 
                           {(receipt.status === "paid" || receipt.status === "transferred") && (
                             <>
-                              {receipt.status === "paid" && (
+                              {receipt.status === "paid" && !receipt.hasTransfer && (
                                 <Button 
                                   size="icon" 
                                   variant="ghost" 
@@ -303,14 +798,14 @@ export default function ReceiptsPage() {
                                 </Button>
                               )}
 
-                              {!receipt.isInvoiceIssued && (
+                              {!receipt.isInvoiceIssued && !receipt.isInvoiceGenerated && (
                                 <Button 
                                   size="icon" 
                                   variant="ghost" 
                                   className="text-purple-600 hover:text-purple-700 hover:bg-purple-50"
                                   onClick={() => createInvoiceMutation.mutate(receipt.id)} 
                                   disabled={isPending}
-                                  title="Emitir NF"
+                                  title="Gerar NF"
                                 >
                                   <FileCheck className="h-4 w-4" />
                                 </Button>
@@ -352,7 +847,7 @@ export default function ReceiptsPage() {
       </Card>
 
       <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Detalhes do Recibo</DialogTitle>
             <DialogDescription>
@@ -371,7 +866,7 @@ export default function ReceiptsPage() {
                   <span>{getContractInfo(selectedReceipt.contractId).tenant}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Locador:</span>
+                  <span className="text-muted-foreground">Proprietário:</span>
                   <span>{getContractInfo(selectedReceipt.contractId).landlord}</span>
                 </div>
               </div>
@@ -385,14 +880,37 @@ export default function ReceiptsPage() {
                   <span className="text-muted-foreground">Taxa Administração ({Number(selectedReceipt.adminFeePercent)}%):</span>
                   <span>R$ {Number(selectedReceipt.adminFeeAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Serviços (Locatário):</span>
-                  <span>R$ {Number(selectedReceipt.servicesTenantTotal).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Serviços (Locador):</span>
-                  <span>R$ {Number(selectedReceipt.servicesLandlordTotal).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
-                </div>
+                {Number(selectedReceipt.servicesTenantTotal) !== 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">
+                      {Number(selectedReceipt.servicesTenantTotal) > 0 ? "Serviços/Despesas (Locatário):" : "Créditos/Ajustes (Locatário):"}
+                    </span>
+                    <span className={Number(selectedReceipt.servicesTenantTotal) < 0 ? "text-green-600" : ""}>
+                      {Number(selectedReceipt.servicesTenantTotal) < 0 ? "+" : "-"} R$ {Math.abs(Number(selectedReceipt.servicesTenantTotal)).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                )}
+                
+                {Number(selectedReceipt.servicesLandlordTotal) !== 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">
+                      {Number(selectedReceipt.servicesLandlordTotal) > 0 ? "Serviços/Despesas (Proprietário):" : "Créditos/Ajustes (Proprietário):"}
+                    </span>
+                    <span className={Number(selectedReceipt.servicesLandlordTotal) < 0 ? "text-green-600" : ""}>
+                       {Number(selectedReceipt.servicesLandlordTotal) < 0 ? "+" : "-"} R$ {Math.abs(Number(selectedReceipt.servicesLandlordTotal)).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                )}
+                
+                {/* Detalhes dos serviços e ajustes */}
+                <ReceiptServicesDetail 
+                  receiptId={selectedReceipt.id} 
+                  contractId={selectedReceipt.contractId} 
+                  year={selectedReceipt.refYear} 
+                  month={selectedReceipt.refMonth}
+                  storedTenantTotal={Number(selectedReceipt.servicesTenantTotal)}
+                  storedLandlordTotal={Number(selectedReceipt.servicesLandlordTotal)}
+                />
               </div>
               <Separator />
               <div className="grid gap-2">
@@ -401,21 +919,47 @@ export default function ReceiptsPage() {
                   <span className="text-green-600 dark:text-green-400">R$ {Number(selectedReceipt.tenantTotalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
                 </div>
                 <div className="flex justify-between font-medium">
-                  <span>Total a repassar (Locador):</span>
+                  <span>Total a repassar (Proprietário):</span>
                   <span>R$ {Number(selectedReceipt.landlordTotalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
                 </div>
               </div>
               <Separator />
               <div className="flex items-center gap-2">
                 <span className="text-sm text-muted-foreground">Status:</span>
+                {selectedReceipt.status === 'transferred' && (
+                  <Badge variant="default" className="bg-green-600 hover:bg-green-700 mr-1">Pago</Badge>
+                )}
                 <Badge variant={statusLabels[selectedReceipt.status]?.variant || "secondary"}>
                   {statusLabels[selectedReceipt.status]?.label || selectedReceipt.status}
                 </Badge>
+                {selectedReceipt.isSlipIssued && (
+                  <Badge variant="default" className="bg-indigo-600 hover:bg-indigo-700">Boleto Emitido</Badge>
+                )}
+                {selectedReceipt.isInvoiceIssued && (
+                  <Badge variant="default" className="bg-purple-600 hover:bg-purple-700">NF Emitida</Badge>
+                )}
+                {selectedReceipt.isInvoiceCancelled && !selectedReceipt.isInvoiceIssued && !selectedReceipt.isInvoiceGenerated && (
+                  <Badge variant="destructive">NF Cancelada</Badge>
+                )}
+                {!selectedReceipt.isInvoiceIssued && selectedReceipt.isInvoiceGenerated && (
+                  <Badge variant="outline" className="text-purple-600 border-purple-200 bg-purple-50">NF Gerada</Badge>
+                )}
               </div>
             </div>
           )}
           <DialogFooter className="flex-wrap gap-2">
-            {/* As ações foram movidas para a grid para facilitar o acesso, mas mantemos o modal para visualização de detalhes */}
+            {selectedReceipt && (
+              <>
+                <Button variant="outline" onClick={() => window.open(`/receipts/${selectedReceipt.id}/print?type=tenant`, '_blank')}>
+                  <Printer className="mr-2 h-4 w-4" />
+                  Imprimir (Locatário)
+                </Button>
+                <Button variant="outline" onClick={() => window.open(`/receipts/${selectedReceipt.id}/print?type=landlord`, '_blank')}>
+                  <Printer className="mr-2 h-4 w-4" />
+                  Imprimir (Proprietário)
+                </Button>
+              </>
+            )}
             <Button variant="outline" onClick={() => setIsDetailOpen(false)}>
               Fechar
             </Button>

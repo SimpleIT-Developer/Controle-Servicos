@@ -1,4 +1,4 @@
-import { Building2, FileText, Receipt, DollarSign, TrendingUp, AlertCircle, Users, Send } from "lucide-react";
+import { Building2, FileText, Receipt, DollarSign, TrendingUp, AlertCircle, Users, Send, CheckCircle } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -8,6 +8,7 @@ interface DashboardStats {
   activeContracts: number;
   totalProperties: number;
   openReceipts: number;
+  paidReceipts: number;
   pendingPayments: number;
   pendingTransfers: number;
   monthlyRevenue: string;
@@ -89,9 +90,10 @@ export default function DashboardPage() {
         <p className="text-muted-foreground">Visão geral do sistema - {currentMonth}</p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {isLoading ? (
           <>
+            <StatCardSkeleton />
             <StatCardSkeleton />
             <StatCardSkeleton />
             <StatCardSkeleton />
@@ -109,7 +111,7 @@ export default function DashboardPage() {
             <StatCard
               title="Imóveis Cadastrados"
               value={stats?.totalProperties || 0}
-              description={`${stats?.totalLandlords || 0} locadores`}
+              description={`${stats?.totalLandlords || 0} proprietários`}
               icon={Building2}
             />
             <StatCard
@@ -118,6 +120,13 @@ export default function DashboardPage() {
               description="Aguardando fechamento"
               icon={Receipt}
               variant={stats?.openReceipts && stats.openReceipts > 0 ? "warning" : "default"}
+            />
+            <StatCard
+              title="Recibos Pagos"
+              value={stats?.paidReceipts || 0}
+              description="Pagos neste mês"
+              icon={CheckCircle}
+              variant="success"
             />
             <StatCard
               title="Repasses Pendentes"
@@ -154,7 +163,7 @@ export default function DashboardPage() {
                     </div>
                     <div>
                       <p className="text-sm font-medium">Receita Estimada</p>
-                      <p className="text-xs text-muted-foreground">Baseado nos contratos ativos</p>
+                      <p className="text-xs text-muted-foreground">Baseado nos recibos fechados</p>
                     </div>
                   </div>
                   <div className="text-right">
@@ -211,7 +220,7 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <p className="text-lg font-bold">{stats?.totalLandlords || 0}</p>
-                    <p className="text-xs text-muted-foreground">Locadores</p>
+                    <p className="text-xs text-muted-foreground">Proprietários</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">

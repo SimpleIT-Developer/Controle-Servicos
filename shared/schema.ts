@@ -12,6 +12,8 @@ export const transactionTypeEnum = pgEnum("transaction_type", ["IN", "OUT"]);
 export const transferStatusEnum = pgEnum("transfer_status", ["pending", "paid", "failed", "reversed"]);
 export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "issued", "error", "cancelled"]);
 export const pixKeyTypeEnum = pgEnum("pix_key_type", ["cpf", "cnpj", "email", "phone", "random"]);
+export const nfseStatusEnum = pgEnum("nfse_status", ["PENDENTE", "ENVIANDO", "EMITIDA", "FALHOU", "CANCELADA"]);
+export const nfseLoteStatusEnum = pgEnum("nfse_lote_status", ["CRIADO", "VALIDADO", "PROCESSANDO", "FINALIZADO", "FINALIZADO_COM_FALHAS"]);
 
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -24,23 +26,72 @@ export const users = pgTable("users", {
 
 export const landlords = pgTable("landlords", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  name: text("name").notNull(),
-  doc: text("doc").notNull(),
+  code: text("code").unique(), // Código (novo)
+  name: text("name").notNull(), // Nome
+  address: text("address"), // Endereço
+  phone: text("phone"), // Telefone
+  neighborhood: text("neighborhood"), // Bairro
+  city: text("city"), // Cidade
+  state: text("state"), // UF
+  zipCode: text("zip_code"), // CEP
+  doc: text("doc").notNull(), // CPF
+  rg: text("rg"), // RG
+  maritalStatus: text("marital_status"), // Estado Civil
+  nationality: text("nationality"), // Naturalidade
+  profession: text("profession"), // Profissão
+  birthDate: text("birth_date"), // Data de Nascimento (armazenado como string para simplificar formato DD/MM/AAAA ou ISO)
+  propertyCount: integer("property_count").default(0), // Quantidade de Imóveis
+  bank: text("bank"), // Banco
+  branch: text("branch"), // Agência
+  account: text("account"), // Conta
+  pixKeyType: pixKeyTypeEnum("pix_key_type"), // Tipo Chave Pix
+  pixKey: text("pix_key"), // Chave Pix
   email: text("email"),
-  phone: text("phone"),
-  pixKey: text("pix_key"),
-  pixKeyType: pixKeyTypeEnum("pix_key_type"),
-  address: text("address"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const tenants = pgTable("tenants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  name: text("name").notNull(),
-  doc: text("doc").notNull(),
+  code: text("code").unique(), // Código
+  name: text("name").notNull(), // Nome
+  address: text("address"), // Endereço
+  phone: text("phone"), // Telefone
+  neighborhood: text("neighborhood"), // Bairro
+  city: text("city"), // Cidade
+  state: text("state"), // UF
+  zipCode: text("zip_code"), // CEP
+  doc: text("doc").notNull(), // CPF
+  rg: text("rg"), // RG
   email: text("email"),
-  phone: text("phone"),
+  maritalStatus: text("marital_status"), // Estado Civil
+  profession: text("profession"), // Profissão
+  birthDate: text("birth_date"), // Data de Nascimento
+  class: text("class"), // Classe (ex: 01-BOM)
+  pixKeyType: pixKeyTypeEnum("pix_key_type"), // Tipo Chave Pix
+  pixKey: text("pix_key"), // Chave Pix
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const guarantors = pgTable("guarantors", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").unique(),
+  name: text("name").notNull(),
   address: text("address"),
+  neighborhood: text("neighborhood"),
+  city: text("city"),
+  state: text("state"),
+  zipCode: text("zip_code"),
+  phone: text("phone"),
+  doc: text("doc").notNull(),
+  rg: text("rg"),
+  email: text("email"),
+  maritalStatus: text("marital_status"),
+  profession: text("profession"),
+  birthDate: text("birth_date"),
+  class: text("class"),
+  spouseName: text("spouse_name"),
+  spouseDoc: text("spouse_doc"),
+  spouseRg: text("spouse_rg"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -58,9 +109,12 @@ export const properties = pgTable("properties", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   code: text("code").notNull().unique(),
   title: text("title").notNull(),
+  saleRent: text("sale_rent"), // Aluguel/Venda
   address: text("address").notNull(),
+  neighborhood: text("neighborhood"), // Bairro
   city: text("city").notNull(),
   state: text("state").notNull(),
+  zipCode: text("zip_code"), // CEP
   rentDefault: decimal("rent_default", { precision: 10, scale: 2 }).notNull(),
   landlordId: varchar("landlord_id").references(() => landlords.id),
   status: propertyStatusEnum("status").default("available").notNull(),
@@ -72,6 +126,8 @@ export const contracts = pgTable("contracts", {
   propertyId: varchar("property_id").references(() => properties.id).notNull(),
   landlordId: varchar("landlord_id").references(() => landlords.id).notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
+  guarantorId: varchar("guarantor_id").references(() => guarantors.id),
+  guaranteeType: text("guarantee_type").default("guarantor"), // guarantor, insurance, deposit, none
   startDate: date("start_date").notNull(),
   endDate: date("end_date").notNull(),
   firstDueDate: date("first_due_date"),
@@ -91,6 +147,7 @@ export const services = pgTable("services", {
   description: text("description").notNull(),
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
   chargedTo: chargedToEnum("charged_to").notNull(),
+  passThrough: boolean("pass_through").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   contractRefIdx: index("services_contract_ref_idx").on(table.contractId, table.refYear, table.refMonth),
@@ -109,7 +166,10 @@ export const receipts = pgTable("receipts", {
   tenantTotalDue: decimal("tenant_total_due", { precision: 10, scale: 2 }).notNull(),
   landlordTotalDue: decimal("landlord_total_due", { precision: 10, scale: 2 }).notNull(),
   status: receiptStatusEnum("status").default("draft").notNull(),
+  isInvoiceGenerated: boolean("is_invoice_generated").default(false).notNull(),
   isInvoiceIssued: boolean("is_invoice_issued").default(false).notNull(),
+  isInvoiceCancelled: boolean("is_invoice_cancelled").default(false).notNull(),
+  isSlipIssued: boolean("is_slip_issued").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   contractRefUnique: uniqueIndex("receipts_contract_ref_unique").on(table.contractId, table.refYear, table.refMonth),
@@ -134,6 +194,7 @@ export const landlordTransfers = pgTable("landlord_transfers", {
   receiptId: varchar("receipt_id").references(() => receipts.id).notNull(),
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
   status: transferStatusEnum("status").default("pending").notNull(),
+  paidAt: timestamp("paid_at"),
   providerTransferId: text("provider_transfer_id"),
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -170,6 +231,10 @@ export const contractsRelations = relations(contracts, ({ one }) => ({
   tenant: one(tenants, {
     fields: [contracts.tenantId],
     references: [tenants.id],
+  }),
+  guarantor: one(guarantors, {
+    fields: [contracts.guarantorId],
+    references: [guarantors.id],
   }),
 }));
 
@@ -223,7 +288,103 @@ export const invoicesRelations = relations(invoices, ({ one }) => ({
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertLandlordSchema = createInsertSchema(landlords).omit({ id: true, createdAt: true });
 export const insertTenantSchema = createInsertSchema(tenants).omit({ id: true, createdAt: true });
+export const insertGuarantorSchema = createInsertSchema(guarantors).omit({ id: true, createdAt: true });
 export const insertServiceProviderSchema = createInsertSchema(serviceProviders).omit({ id: true, createdAt: true });
+export const nfseConfig = pgTable("nfse_config", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  cnpjPrestador: text("cnpj_prestador").notNull(),
+  inscricaoMunicipal: text("inscricao_municipal").notNull(),
+  codigoMunicipioIbge: text("codigo_municipio_ibge").notNull(),
+  regimeTributario: text("regime_tributario"),
+  itemServico: text("item_servico").notNull(),
+  cnae: text("cnae"),
+  descricaoServicoPadrao: text("descricao_servico_padrao").notNull(),
+  aliquotaIss: decimal("aliquota_iss", { precision: 5, scale: 2 }).notNull(),
+  issRetido: boolean("iss_retido").default(false).notNull(),
+  ambiente: text("ambiente").default("homologacao").notNull(),
+  certificadoSenha: text("certificado_senha"),
+  ultimoNumeroNfse: integer("ultimo_numero_nfse").default(0).notNull(),
+  serieNfse: text("serie_nfse").default("900").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const nfseLotes = pgTable("nfse_lotes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  criadoPorUsuarioId: varchar("criado_por_usuario_id").references(() => users.id),
+  qtdItens: integer("qtd_itens").notNull().default(0),
+  valorTotal: decimal("valor_total", { precision: 10, scale: 2 }).notNull().default("0"),
+  status: nfseLoteStatusEnum("status").default("CRIADO").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const nfseEmissoes = pgTable("nfse_emissoes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  loteId: varchar("lote_id").references(() => nfseLotes.id),
+  origemTipo: text("origem_tipo").notNull(), // ex: "COMISSAO"
+  origemId: varchar("origem_id").notNull(),
+  tomadorNome: text("tomador_nome").notNull(),
+  tomadorCpfCnpj: text("tomador_cpf_cnpj").notNull(),
+  tomadorEmail: text("tomador_email"),
+  tomadorEnderecoJson: text("tomador_endereco_json"), // JSON stringified
+  valorServico: decimal("valor_servico", { precision: 10, scale: 2 }).notNull(),
+  baseCalculo: decimal("base_calculo", { precision: 10, scale: 2 }).notNull(),
+  aliquotaIss: decimal("aliquota_iss", { precision: 5, scale: 2 }).notNull(),
+  valorIss: decimal("valor_iss", { precision: 10, scale: 2 }).notNull(),
+  descricaoServico: text("descricao_servico").notNull(),
+  status: nfseStatusEnum("status").default("PENDENTE").notNull(),
+  idempotencyKey: text("idempotency_key").unique(),
+  apiRequestRaw: text("api_request_raw"),
+  apiResponseRaw: text("api_response_raw"),
+  numeroNfse: text("numero_nfse"),
+  codigoVerificacao: text("codigo_verificacao"),
+  chaveAcesso: text("chave_acesso"),
+  xmlUrl: text("xml_url"),
+  pdfUrl: text("pdf_url"),
+  erroCodigo: text("erro_codigo"),
+  erroMensagem: text("erro_mensagem"),
+  retryCount: integer("retry_count").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const systemLogs = pgTable("system_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  level: text("level").notNull(), // INFO, ERROR, WARN
+  category: text("category").notNull(), // NFSE, SYSTEM, API
+  message: text("message").notNull(),
+  details: text("details"), // JSON stringified
+  correlationId: text("correlation_id"),
+});
+
+// Relationships
+export const nfseEmissoesRelations = relations(nfseEmissoes, ({ one }) => ({
+  lote: one(nfseLotes, {
+    fields: [nfseEmissoes.loteId],
+    references: [nfseLotes.id],
+  }),
+}));
+
+export const nfseLotesRelations = relations(nfseLotes, ({ many }) => ({
+  emissoes: many(nfseEmissoes),
+}));
+
+export const insertNfseConfigSchema = createInsertSchema(nfseConfig).omit({ id: true, updatedAt: true });
+export const insertNfseLoteSchema = createInsertSchema(nfseLotes).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertNfseEmissaoSchema = createInsertSchema(nfseEmissoes).omit({ id: true, createdAt: true, updatedAt: true });
+
+export type InsertNfseConfig = z.infer<typeof insertNfseConfigSchema>;
+export type NfseConfig = typeof nfseConfig.$inferSelect;
+export type InsertNfseLote = z.infer<typeof insertNfseLoteSchema>;
+export type NfseLote = typeof nfseLotes.$inferSelect;
+export type InsertNfseEmissao = z.infer<typeof insertNfseEmissaoSchema>;
+export type NfseEmissao = typeof nfseEmissoes.$inferSelect;
+
+export const insertSystemLogSchema = createInsertSchema(systemLogs).omit({ id: true, timestamp: true });
+export type InsertSystemLog = z.infer<typeof insertSystemLogSchema>;
+export type SystemLog = typeof systemLogs.$inferSelect;
+
 export const insertPropertySchema = createInsertSchema(properties).omit({ id: true, createdAt: true });
 export const insertContractSchema = createInsertSchema(contracts).omit({ id: true, createdAt: true });
 export const insertServiceSchema = createInsertSchema(services).omit({ id: true, createdAt: true });
@@ -238,6 +399,8 @@ export type InsertLandlord = z.infer<typeof insertLandlordSchema>;
 export type Landlord = typeof landlords.$inferSelect;
 export type InsertTenant = z.infer<typeof insertTenantSchema>;
 export type Tenant = typeof tenants.$inferSelect;
+export type InsertGuarantor = z.infer<typeof insertGuarantorSchema>;
+export type Guarantor = typeof guarantors.$inferSelect;
 export type InsertServiceProvider = z.infer<typeof insertServiceProviderSchema>;
 export type ServiceProvider = typeof serviceProviders.$inferSelect;
 export type InsertProperty = z.infer<typeof insertPropertySchema>;

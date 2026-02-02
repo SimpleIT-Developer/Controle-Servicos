@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Contract, Property, Landlord, Tenant } from "@shared/schema";
+import type { Contract, Property, Landlord, Tenant, Guarantor } from "@shared/schema";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
   active: { label: "Ativo", variant: "default" },
@@ -30,6 +30,7 @@ export default function ContractsPage() {
   const { data: properties } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
   const { data: landlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
   const { data: tenants } = useQuery<Tenant[]>({ queryKey: ["/api/tenants"] });
+  const { data: guarantors } = useQuery<Guarantor[]>({ queryKey: ["/api/guarantors"] });
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => apiRequest("POST", "/api/contracts", data),
@@ -78,7 +79,10 @@ export default function ContractsPage() {
     propertyId: "",
     landlordId: "",
     tenantId: "",
+    guarantorId: "",
+    guaranteeType: "guarantor",
     startDate: "",
+    duration: 30, // Default duration in months
     endDate: "",
     firstDueDate: "",
     dueDay: 5,
@@ -87,13 +91,56 @@ export default function ContractsPage() {
     status: "active",
   });
 
+  const calculateEndDate = (start: string, months: number) => {
+    if (!start) return "";
+    const [year, month, day] = start.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    
+    // Add months with clamp
+    date.setMonth(date.getMonth() + months);
+    if (date.getDate() !== day) {
+      date.setDate(0);
+    }
+    
+    // Subtract 1 day
+    date.setDate(date.getDate() - 1);
+    
+    // Format back to YYYY-MM-DD
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const calculateDuration = (start: string, end: string) => {
+    if (!start || !end) return 30;
+    const [sY, sM, sD] = start.split('-').map(Number);
+    const [eY, eM, eD] = end.split('-').map(Number);
+    
+    const startDate = new Date(sY, sM - 1, sD);
+    const endDate = new Date(eY, eM - 1, eD);
+    
+    // Add 1 day to end date to include the last day in calculation
+    endDate.setDate(endDate.getDate() + 1);
+    
+    let months = (endDate.getFullYear() - startDate.getFullYear()) * 12;
+    months -= startDate.getMonth();
+    months += endDate.getMonth();
+    
+    return months <= 0 ? 30 : months;
+  };
+
   const handleEditClick = (contract: Contract) => {
     setEditingContract(contract);
+    const duration = calculateDuration(contract.startDate, contract.endDate);
     setFormData({
       propertyId: contract.propertyId,
       landlordId: contract.landlordId,
       tenantId: contract.tenantId,
+      guarantorId: contract.guarantorId || "",
+      guaranteeType: contract.guaranteeType || "guarantor",
       startDate: contract.startDate,
+      duration: duration,
       endDate: contract.endDate,
       firstDueDate: contract.firstDueDate || "",
       dueDay: contract.dueDay,
@@ -110,8 +157,12 @@ export default function ContractsPage() {
       propertyId: "",
       landlordId: "",
       tenantId: "",
+      guarantorId: "",
+      guaranteeType: "guarantor",
       startDate: "",
+      duration: 30,
       endDate: "",
+      firstDueDate: "",
       dueDay: 5,
       rentAmount: "",
       adminFeePercent: 10,
@@ -127,6 +178,8 @@ export default function ContractsPage() {
       dueDay: Number(formData.dueDay),
       rentAmount: formData.rentAmount,
       adminFeePercent: formData.adminFeePercent.toString(),
+      guarantorId: formData.guarantorId || null,
+      guaranteeType: formData.guaranteeType,
     };
 
     if (editingContract) {
@@ -139,6 +192,7 @@ export default function ContractsPage() {
   const getPropertyTitle = (id: string) => properties?.find((p) => p.id === id)?.title || "-";
   const getLandlordName = (id: string) => landlords?.find((l) => l.id === id)?.name || "-";
   const getTenantName = (id: string) => tenants?.find((t) => t.id === id)?.name || "-";
+  const getGuarantorName = (id: string) => guarantors?.find((g) => g.id === id)?.name || "-";
 
   const filteredContracts = contracts?.filter((c) =>
     getPropertyTitle(c.propertyId).toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -189,7 +243,7 @@ export default function ContractsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Imóvel</TableHead>
-                    <TableHead className="hidden md:table-cell">Locador</TableHead>
+                    <TableHead className="hidden md:table-cell">Proprietário</TableHead>
                     <TableHead className="hidden md:table-cell">Locatário</TableHead>
                     <TableHead className="hidden lg:table-cell">Período</TableHead>
                     <TableHead>Aluguel</TableHead>
@@ -251,7 +305,7 @@ export default function ContractsPage() {
       </Card>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingContract ? "Editar Contrato" : "Novo Contrato"}</DialogTitle>
             <DialogDescription>{editingContract ? "Atualize os dados do contrato." : "Preencha os dados do novo contrato."}</DialogDescription>
@@ -277,7 +331,7 @@ export default function ContractsPage() {
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="landlordId">Locador *</Label>
+                <Label htmlFor="landlordId">Proprietário *</Label>
                 <Select
                   name="landlordId"
                   value={formData.landlordId}
@@ -312,8 +366,35 @@ export default function ContractsPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="guarantorId">Fiador / Garantia</Label>
+                <Select
+                  name="guarantorId"
+                  value={formData.guaranteeType === 'insurance' ? 'insurance' : (formData.guarantorId || 'none')}
+                  onValueChange={(value) => {
+                    if (value === 'insurance') {
+                      setFormData({ ...formData, guaranteeType: 'insurance', guarantorId: '' });
+                    } else if (value === 'none') {
+                      setFormData({ ...formData, guaranteeType: 'none', guarantorId: '' });
+                    } else {
+                      setFormData({ ...formData, guaranteeType: 'guarantor', guarantorId: value });
+                    }
+                  }}
+                >
+                  <SelectTrigger data-testid="select-contract-guarantor">
+                    <SelectValue placeholder="Selecione (Opcional)..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Nenhum</SelectItem>
+                    <SelectItem value="insurance">SEGURO FIANÇA</SelectItem>
+                    {guarantors?.map((g) => (
+                      <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-4">
               <div className="space-y-2">
                 <Label htmlFor="startDate">Data Início *</Label>
                 <Input
@@ -321,25 +402,57 @@ export default function ContractsPage() {
                   name="startDate"
                   type="date"
                   value={formData.startDate}
-                  onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                  onChange={(e) => {
+                    const newStart = e.target.value;
+                    const newEnd = calculateEndDate(newStart, formData.duration);
+                    setFormData({ ...formData, startDate: newStart, endDate: newEnd });
+                  }}
                   required
                   data-testid="input-contract-start"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="endDate">Data Fim *</Label>
+                <Label htmlFor="duration">Prazo *</Label>
+                <Select
+                  name="duration"
+                  value={formData.duration.toString()}
+                  onValueChange={(value) => {
+                    const newDuration = Number(value);
+                    const newEnd = calculateEndDate(formData.startDate, newDuration);
+                    setFormData({ ...formData, duration: newDuration, endDate: newEnd });
+                  }}
+                >
+                  <SelectTrigger data-testid="select-contract-duration">
+                    <SelectValue placeholder="Selecione..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="12">12 meses (1 ano)</SelectItem>
+                    <SelectItem value="24">24 meses (2 anos)</SelectItem>
+                    <SelectItem value="30">30 meses (2,5 anos)</SelectItem>
+                    <SelectItem value="36">36 meses (3 anos)</SelectItem>
+                    <SelectItem value="48">48 meses (4 anos)</SelectItem>
+                    <SelectItem value="60">60 meses (5 anos)</SelectItem>
+                    {/* Add custom option if the current duration is not in the list */}
+                    {![12, 24, 30, 36, 48, 60].includes(formData.duration) && (
+                      <SelectItem value={formData.duration.toString()}>{formData.duration} meses</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="endDate">Data Fim</Label>
                 <Input
                   id="endDate"
                   name="endDate"
                   type="date"
                   value={formData.endDate}
-                  onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
-                  required
+                  readOnly
+                  className="bg-muted"
                   data-testid="input-contract-end"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="firstDueDate">Primeiro Vencimento *</Label>
+                <Label htmlFor="firstDueDate" className="whitespace-nowrap">Primeiro Vencimento *</Label>
                 <Input
                   id="firstDueDate"
                   name="firstDueDate"

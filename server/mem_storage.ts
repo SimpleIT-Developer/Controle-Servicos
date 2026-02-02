@@ -2,6 +2,7 @@ import {
   type User, type InsertUser,
   type Landlord, type InsertLandlord,
   type Tenant, type InsertTenant,
+  type Guarantor, type InsertGuarantor,
   type ServiceProvider, type InsertServiceProvider,
   type Property, type InsertProperty,
   type Contract, type InsertContract,
@@ -10,6 +11,9 @@ import {
   type CashTransaction, type InsertCashTransaction,
   type LandlordTransfer, type InsertLandlordTransfer,
   type Invoice, type InsertInvoice,
+  type NfseConfig, type InsertNfseConfig,
+  type NfseLote, type InsertNfseLote,
+  type NfseEmissao, type InsertNfseEmissao,
 } from "@shared/schema";
 import type { IStorage } from "./storage";
 import { randomUUID } from "crypto";
@@ -18,6 +22,7 @@ export class MemStorage implements IStorage {
   private users: Map<string, User> = new Map();
   private landlords: Map<string, Landlord> = new Map();
   private tenants: Map<string, Tenant> = new Map();
+  private guarantors: Map<string, Guarantor> = new Map();
   private serviceProviders: Map<string, ServiceProvider> = new Map();
   private properties: Map<string, Property> = new Map();
   private contracts: Map<string, Contract> = new Map();
@@ -26,6 +31,9 @@ export class MemStorage implements IStorage {
   private cashTransactions: Map<string, CashTransaction> = new Map();
   private landlordTransfers: Map<string, LandlordTransfer> = new Map();
   private invoices: Map<string, Invoice> = new Map();
+  private nfseConfig: NfseConfig | undefined;
+  private nfseLotes: Map<string, NfseLote> = new Map();
+  private nfseEmissoes: Map<string, NfseEmissao> = new Map();
 
   async getUser(id: string): Promise<User | undefined> {
     return this.users.get(id);
@@ -115,6 +123,40 @@ export class MemStorage implements IStorage {
 
   async deleteTenant(id: string): Promise<void> {
     this.tenants.delete(id);
+  }
+
+  async getGuarantors(): Promise<Guarantor[]> {
+    return Array.from(this.guarantors.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async getGuarantor(id: string): Promise<Guarantor | undefined> {
+    return this.guarantors.get(id);
+  }
+
+  async createGuarantor(data: InsertGuarantor): Promise<Guarantor> {
+    const id = data.id || randomUUID();
+    const guarantor: Guarantor = {
+      ...data,
+      id,
+      email: data.email || null,
+      phone: data.phone || null,
+      address: data.address || null,
+      createdAt: new Date(),
+    };
+    this.guarantors.set(id, guarantor);
+    return guarantor;
+  }
+
+  async updateGuarantor(id: string, data: Partial<InsertGuarantor>): Promise<Guarantor | undefined> {
+    const existing = this.guarantors.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...data };
+    this.guarantors.set(id, updated);
+    return updated;
+  }
+
+  async deleteGuarantor(id: string): Promise<void> {
+    this.guarantors.delete(id);
   }
 
   async getServiceProviders(): Promise<ServiceProvider[]> {
@@ -386,6 +428,31 @@ export class MemStorage implements IStorage {
 
   async getLandlordTransfer(id: string): Promise<LandlordTransfer | undefined> {
     return this.landlordTransfers.get(id);
+  async getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<LandlordTransfer[]> {
+    const transfers = Array.from(this.landlordTransfers.values());
+    const filtered: LandlordTransfer[] = [];
+    
+    for (const transfer of transfers) {
+      if (type === "paid") {
+        if (transfer.paidAt) {
+          const paidDate = new Date(transfer.paidAt);
+          if (paidDate.getFullYear() === year && paidDate.getMonth() + 1 === month) {
+            filtered.push(transfer);
+          }
+        }
+      } else {
+        const receipt = this.receipts.get(transfer.receiptId);
+        if (receipt && receipt.refYear === year && receipt.refMonth === month) {
+          filtered.push(transfer);
+        }
+      }
+    }
+    
+    return filtered;
+  }
+
+  async getRevenueReport(year: number, month: number): Promise<RevenueReportItem[]> {
+    return [];
   }
 
   async createLandlordTransfer(data: InsertLandlordTransfer): Promise<LandlordTransfer> {
@@ -446,5 +513,124 @@ export class MemStorage implements IStorage {
 
   async deleteInvoice(id: string): Promise<void> {
     this.invoices.delete(id);
+  }
+
+  // NFS-e Implementation
+  async getNfseConfig(): Promise<NfseConfig | undefined> {
+    return this.nfseConfig;
+  }
+
+  async createNfseConfig(data: InsertNfseConfig): Promise<NfseConfig> {
+    const id = data.id || randomUUID();
+    const config: NfseConfig = {
+      ...data,
+      id,
+      regimeTributario: data.regimeTributario || null,
+      cnae: data.cnae || null,
+      certificadoSenha: data.certificadoSenha || null,
+      issRetido: data.issRetido || false,
+      ambiente: data.ambiente || "homologacao",
+      updatedAt: new Date(),
+    };
+    this.nfseConfig = config;
+    return config;
+  }
+
+  async updateNfseConfig(id: string, data: Partial<InsertNfseConfig>): Promise<NfseConfig | undefined> {
+    if (!this.nfseConfig || this.nfseConfig.id !== id) return undefined;
+    this.nfseConfig = { ...this.nfseConfig, ...data, updatedAt: new Date() };
+    return this.nfseConfig;
+  }
+
+  async upsertNfseConfig(data: InsertNfseConfig): Promise<NfseConfig> {
+    if (this.nfseConfig) {
+      this.nfseConfig = { ...this.nfseConfig, ...data, updatedAt: new Date() };
+      return this.nfseConfig;
+    } else {
+      return this.createNfseConfig(data);
+    }
+  }
+
+  async createNfseLote(data: InsertNfseLote): Promise<NfseLote> {
+    const id = data.id || randomUUID();
+    const lote: NfseLote = {
+      ...data,
+      id,
+      criadoPorUsuarioId: data.criadoPorUsuarioId || null,
+      qtdItens: data.qtdItens || 0,
+      valorTotal: data.valorTotal || "0",
+      status: data.status || "CRIADO",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.nfseLotes.set(id, lote);
+    return lote;
+  }
+
+  async getNfseLote(id: string): Promise<NfseLote | undefined> {
+    return this.nfseLotes.get(id);
+  }
+
+  async updateNfseLote(id: string, data: Partial<InsertNfseLote>): Promise<NfseLote | undefined> {
+    const existing = this.nfseLotes.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...data, updatedAt: new Date() };
+    this.nfseLotes.set(id, updated);
+    return updated;
+  }
+
+  async createNfseEmissao(data: InsertNfseEmissao): Promise<NfseEmissao> {
+    const id = data.id || randomUUID();
+    const emissao: NfseEmissao = {
+      ...data,
+      id,
+      loteId: data.loteId || null,
+      tomadorEmail: data.tomadorEmail || null,
+      tomadorEnderecoJson: data.tomadorEnderecoJson || null,
+      status: data.status || "PENDENTE",
+      idempotencyKey: data.idempotencyKey || null,
+      apiRequestRaw: data.apiRequestRaw || null,
+      apiResponseRaw: data.apiResponseRaw || null,
+      numeroNfse: data.numeroNfse || null,
+      codigoVerificacao: data.codigoVerificacao || null,
+      chaveAcesso: data.chaveAcesso || null,
+      xmlUrl: data.xmlUrl || null,
+      pdfUrl: data.pdfUrl || null,
+      erroCodigo: data.erroCodigo || null,
+      erroMensagem: data.erroMensagem || null,
+      retryCount: data.retryCount || 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.nfseEmissoes.set(id, emissao);
+    return emissao;
+  }
+
+  async getNfseEmissoes(): Promise<NfseEmissao[]> {
+    return Array.from(this.nfseEmissoes.values());
+  }
+
+  async getNfseEmissao(id: string): Promise<NfseEmissao | undefined> {
+    return this.nfseEmissoes.get(id);
+  }
+
+  async getNfseEmissoesByLote(loteId: string): Promise<NfseEmissao[]> {
+    return Array.from(this.nfseEmissoes.values()).filter(e => e.loteId === loteId);
+  }
+
+  async updateNfseEmissao(id: string, data: Partial<InsertNfseEmissao>): Promise<NfseEmissao | undefined> {
+    const existing = this.nfseEmissoes.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...data, updatedAt: new Date() };
+    this.nfseEmissoes.set(id, updated);
+    return updated;
+  }
+
+  async getNfseEmissaoByIdempotency(key: string): Promise<NfseEmissao | undefined> {
+    return Array.from(this.nfseEmissoes.values()).find(e => e.idempotencyKey === key);
+  }
+
+  async getPendingNfseEmissoes(): Promise<NfseEmissao[]> {
+    return Array.from(this.nfseEmissoes.values()).filter(e => e.status === "PENDENTE");
   }
 }

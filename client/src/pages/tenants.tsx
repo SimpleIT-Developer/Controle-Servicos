@@ -7,10 +7,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Tenant } from "@shared/schema";
+
+const pixKeyTypes = [
+  { value: "cpf", label: "CPF" },
+  { value: "cnpj", label: "CNPJ" },
+  { value: "email", label: "Email" },
+  { value: "phone", label: "Telefone" },
+  { value: "random", label: "Chave Aleatória" },
+];
 
 export default function TenantsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -62,11 +71,23 @@ export default function TenantsPage() {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const data = {
+      code: formData.get("code") as string || null,
       name: formData.get("name") as string,
       doc: formData.get("doc") as string,
+      rg: formData.get("rg") as string || null,
       email: formData.get("email") as string || null,
       phone: formData.get("phone") as string || null,
+      birthDate: formData.get("birthDate") as string || null,
+      maritalStatus: formData.get("maritalStatus") as string || null,
+      profession: formData.get("profession") as string || null,
+      class: formData.get("class") as string || null,
       address: formData.get("address") as string || null,
+      neighborhood: formData.get("neighborhood") as string || null,
+      city: formData.get("city") as string || null,
+      state: formData.get("state") as string || null,
+      zipCode: formData.get("zipCode") as string || null,
+      pixKeyType: formData.get("pixKeyType") as string || null,
+      pixKey: formData.get("pixKey") as string || null,
     };
 
     if (editingTenant) {
@@ -80,6 +101,7 @@ export default function TenantsPage() {
     (t) =>
       t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       t.doc.includes(searchTerm) ||
+      (t.code && t.code.includes(searchTerm)) ||
       t.email?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -111,7 +133,7 @@ export default function TenantsPage() {
             <div className="relative w-full sm:w-64">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Buscar..."
+                placeholder="Buscar por nome, CPF ou código..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-9"
@@ -132,6 +154,7 @@ export default function TenantsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[80px]">Código</TableHead>
                     <TableHead>Nome</TableHead>
                     <TableHead>CPF/CNPJ</TableHead>
                     <TableHead className="hidden md:table-cell">Email</TableHead>
@@ -142,6 +165,7 @@ export default function TenantsPage() {
                 <TableBody>
                   {filteredTenants.map((tenant) => (
                     <TableRow key={tenant.id} data-testid={`row-tenant-${tenant.id}`}>
+                      <TableCell className="font-mono text-sm">{tenant.code || "-"}</TableCell>
                       <TableCell className="font-medium">{tenant.name}</TableCell>
                       <TableCell className="font-mono text-sm">{tenant.doc}</TableCell>
                       <TableCell className="hidden md:table-cell">{tenant.email || "-"}</TableCell>
@@ -172,38 +196,120 @@ export default function TenantsPage() {
       </Card>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingTenant ? "Editar Locatário" : "Novo Locatário"}</DialogTitle>
             <DialogDescription>
               {editingTenant ? "Atualize os dados do locatário." : "Preencha os dados do novo locatário."}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
+          <form key={editingTenant ? editingTenant.id : "new"} onSubmit={handleSubmit} className="space-y-6">
+            <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
-                <Label htmlFor="name">Nome *</Label>
-                <Input id="name" name="name" defaultValue={editingTenant?.name} required data-testid="input-tenant-name" />
+                <Label htmlFor="code">Código</Label>
+                <Input id="code" name="code" defaultValue={editingTenant?.code || ""} placeholder="Ex: 0025" />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="doc">CPF/CNPJ *</Label>
-                <Input id="doc" name="doc" defaultValue={editingTenant?.doc} required data-testid="input-tenant-doc" />
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="name">Nome *</Label>
+                <Input id="name" name="name" defaultValue={editingTenant?.name} required />
               </div>
             </div>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="doc">CPF *</Label>
+                <Input id="doc" name="doc" defaultValue={editingTenant?.doc} required />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rg">RG</Label>
+                <Input id="rg" name="rg" defaultValue={editingTenant?.rg || ""} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="birthDate">Data de Nascimento</Label>
+                <Input 
+                  id="birthDate" 
+                  name="birthDate" 
+                  defaultValue={(editingTenant?.birthDate && editingTenant.birthDate.trim() !== "/  /") ? editingTenant.birthDate : ""} 
+                  placeholder="DD/MM/AAAA" 
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="maritalStatus">Estado Civil</Label>
+                <Input id="maritalStatus" name="maritalStatus" defaultValue={editingTenant?.maritalStatus || ""} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="profession">Profissão</Label>
+                <Input id="profession" name="profession" defaultValue={editingTenant?.profession || ""} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="class">Classe</Label>
+                <Input id="class" name="class" defaultValue={editingTenant?.class || ""} placeholder="Ex: 01-BOM" />
+              </div>
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
-                <Input id="email" name="email" type="email" defaultValue={editingTenant?.email || ""} data-testid="input-tenant-email" />
+                <Input id="email" name="email" type="email" defaultValue={editingTenant?.email || ""} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="phone">Telefone</Label>
-                <Input id="phone" name="phone" defaultValue={editingTenant?.phone || ""} data-testid="input-tenant-phone" />
+                <Input id="phone" name="phone" defaultValue={editingTenant?.phone || ""} />
               </div>
             </div>
+
             <div className="space-y-2">
               <Label htmlFor="address">Endereço</Label>
-              <Input id="address" name="address" defaultValue={editingTenant?.address || ""} data-testid="input-tenant-address" />
+              <Input id="address" name="address" defaultValue={editingTenant?.address || ""} />
             </div>
+
+            <div className="grid gap-4 sm:grid-cols-4">
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="neighborhood">Bairro</Label>
+                <Input id="neighborhood" name="neighborhood" defaultValue={editingTenant?.neighborhood || ""} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="city">Cidade</Label>
+                <Input id="city" name="city" defaultValue={editingTenant?.city || ""} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="state">UF</Label>
+                <Input id="state" name="state" defaultValue={editingTenant?.state || ""} maxLength={2} />
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="zipCode">CEP</Label>
+                <Input id="zipCode" name="zipCode" defaultValue={editingTenant?.zipCode || ""} />
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="pixKeyType">Tipo Chave Pix</Label>
+                <Select name="pixKeyType" defaultValue={editingTenant?.pixKeyType || undefined}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {pixKeyTypes.map((type) => (
+                      <SelectItem key={type.value} value={type.value}>
+                        {type.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="pixKey">Chave Pix</Label>
+                <Input id="pixKey" name="pixKey" defaultValue={editingTenant?.pixKey || ""} />
+              </div>
+            </div>
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>
               <Button type="submit" disabled={isPending} data-testid="button-save-tenant">

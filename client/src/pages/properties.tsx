@@ -65,9 +65,12 @@ export default function PropertiesPage() {
     const data = {
       code: formData.get("code") as string,
       title: formData.get("title") as string,
+      saleRent: formData.get("saleRent") as string,
       address: formData.get("address") as string,
+      neighborhood: formData.get("neighborhood") as string,
       city: formData.get("city") as string,
       state: formData.get("state") as string,
+      zipCode: formData.get("zipCode") as string,
       rentDefault: formData.get("rentDefault") as string,
       landlordId: formData.get("landlordId") as string || null,
       status: formData.get("status") as string,
@@ -137,7 +140,7 @@ export default function PropertiesPage() {
                     <TableHead>Código</TableHead>
                     <TableHead>Título</TableHead>
                     <TableHead className="hidden md:table-cell">Endereço</TableHead>
-                    <TableHead className="hidden lg:table-cell">Locador</TableHead>
+                    <TableHead className="hidden lg:table-cell">Proprietário</TableHead>
                     <TableHead>Aluguel</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Ações</TableHead>
@@ -149,9 +152,11 @@ export default function PropertiesPage() {
                       <TableCell className="font-mono text-sm">{property.code}</TableCell>
                       <TableCell className="font-medium">{property.title}</TableCell>
                       <TableCell className="hidden md:table-cell">
-                        <div className="flex items-center gap-1">
-                          <MapPin className="h-3 w-3 text-muted-foreground" />
-                          <span className="truncate max-w-[200px]">{property.city}, {property.state}</span>
+                        <div className="flex flex-col">
+                          <span className="truncate max-w-[250px] font-medium">{property.address}</span>
+                          <span className="truncate max-w-[250px] text-xs text-muted-foreground">
+                            {property.neighborhood ? `${property.neighborhood} - ` : ""}{property.city}/{property.state}
+                          </span>
                         </div>
                       </TableCell>
                       <TableCell className="hidden lg:table-cell">{getLandlordName(property.landlordId)}</TableCell>
@@ -192,20 +197,42 @@ export default function PropertiesPage() {
             <DialogTitle>{editingProperty ? "Editar Imóvel" : "Novo Imóvel"}</DialogTitle>
             <DialogDescription>{editingProperty ? "Atualize os dados do imóvel." : "Preencha os dados do novo imóvel."}</DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4" key={editingProperty ? editingProperty.id : 'new'}>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="code">Código *</Label>
                 <Input id="code" name="code" defaultValue={editingProperty?.code} required data-testid="input-property-code" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="title">Título *</Label>
-                <Input id="title" name="title" defaultValue={editingProperty?.title} required data-testid="input-property-title" />
+                <Label htmlFor="saleRent">Aluguel/Venda</Label>
+                <Select name="saleRent" defaultValue={editingProperty?.saleRent || "Aluguel"}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Aluguel">Aluguel</SelectItem>
+                    <SelectItem value="Venda">Venda</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="title">Título *</Label>
+              <Input id="title" name="title" defaultValue={editingProperty?.title} required data-testid="input-property-title" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="address">Endereço *</Label>
               <Input id="address" name="address" defaultValue={editingProperty?.address} required data-testid="input-property-address" />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="neighborhood">Bairro</Label>
+                <Input id="neighborhood" name="neighborhood" defaultValue={editingProperty?.neighborhood || ''} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="zipCode">CEP</Label>
+                <Input id="zipCode" name="zipCode" defaultValue={editingProperty?.zipCode || ''} />
+              </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -237,10 +264,10 @@ export default function PropertiesPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="landlordId">Locador (Proprietário)</Label>
+              <Label htmlFor="landlordId">Proprietário</Label>
               <Select name="landlordId" defaultValue={editingProperty?.landlordId || ""}>
                 <SelectTrigger data-testid="select-property-landlord">
-                  <SelectValue placeholder="Selecione o locador..." />
+                  <SelectValue placeholder="Selecione o proprietário..." />
                 </SelectTrigger>
                 <SelectContent>
                   {landlords?.map((landlord) => (

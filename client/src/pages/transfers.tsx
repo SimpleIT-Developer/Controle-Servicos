@@ -108,7 +108,7 @@ export default function TransfersPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Repasses para Locadores</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Repasses para Proprietários</h1>
           <p className="text-muted-foreground">Gerencie os repasses via PIX</p>
         </div>
       </div>
@@ -167,7 +167,7 @@ export default function TransfersPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Locador</TableHead>
+                    <TableHead>Proprietário</TableHead>
                     <TableHead className="hidden md:table-cell">Imóvel</TableHead>
                     <TableHead>Referência</TableHead>
                     <TableHead>Valor</TableHead>

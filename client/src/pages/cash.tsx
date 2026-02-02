@@ -17,7 +17,7 @@ import type { CashTransaction } from "@shared/schema";
 const categories = [
   "Aluguel",
   "Taxa de Administração",
-  "Repasse ao Locador",
+  "Repasse ao Proprietário",
   "Serviços",
   "Despesas Operacionais",
   "Outros",
@@ -199,8 +199,14 @@ export default function CashPage() {
                           <Button size="icon" variant="ghost" onClick={() => { setEditingTransaction(transaction); setIsDialogOpen(true); }}>
                             <Pencil className="h-4 w-4" />
                           </Button>
-                          <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(transaction.id)}>
-                            <Trash2 className="h-4 w-4" />
+                          <Button 
+                            size="icon" 
+                            variant="ghost" 
+                            onClick={() => deleteMutation.mutate(transaction.id)}
+                            disabled={!!transaction.receiptId}
+                            title={transaction.receiptId ? "Transação vinculada a um recibo. Não pode ser excluída manualmente." : "Excluir transação"}
+                          >
+                            <Trash2 className={`h-4 w-4 ${transaction.receiptId ? "opacity-50" : ""}`} />
                           </Button>
                         </div>
                       </TableCell>
