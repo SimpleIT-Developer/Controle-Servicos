@@ -336,9 +336,9 @@ export async function registerRoutes(
       // Calculate Due Date:
       // "o Vencimento me desculpe, mas é no mesmo mês de referencia"
       const year = receipt.refYear;
-      const monthIndex = receipt.refMonth - 1; // Convert to 0-based
-      const dueDate = new Date(year, monthIndex, dayDue);
-      boletoData.dataVencimento = dueDate.toISOString().split('T')[0];
+      const month = receipt.refMonth;
+      // Format YYYY-MM-DD directly to avoid timezone issues
+      boletoData.dataVencimento = `${year}-${String(month).padStart(2, '0')}-${String(dayDue).padStart(2, '0')}`;
 
       // Add Nota Fiscal Info if available
       const invoices = await storage.getInvoicesByReceiptId(receipt.id);
@@ -1994,9 +1994,8 @@ export async function registerRoutes(
       }
       
       const year = receipt.refYear;
-      const monthIndex = receipt.refMonth - 1; 
-      const dueDate = new Date(year, monthIndex, dayDue);
-      boletoData.dataVencimento = dueDate.toISOString().split('T')[0];
+      const month = receipt.refMonth;
+      boletoData.dataVencimento = `${year}-${String(month).padStart(2, '0')}-${String(dayDue).padStart(2, '0')}`;
 
       // Add Nota Fiscal Info if available
       if (nfseEmissao && nfseEmissao.chaveAcesso && nfseEmissao.numero) {
