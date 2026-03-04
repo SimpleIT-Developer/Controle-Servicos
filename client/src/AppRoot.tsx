@@ -10,22 +10,20 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import NotFound from "@/pages/not-found";
 import AuthPage from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
-import Properties from "@/pages/properties";
-import Tenants from "@/pages/tenants";
-import Guarantors from "@/pages/guarantors";
-import Owners from "@/pages/landlords";
+import Projects from "@/pages/projects";
+import Companies from "@/pages/companies";
+import Clients from "@/pages/clients";
+import Analysts from "@/pages/analysts";
+import Partners from "@/pages/partners";
+import ServiceCatalog from "@/pages/service-catalog";
 import Contracts from "@/pages/contracts";
-import Maintenance from "@/pages/services";
-import Providers from "@/pages/providers";
 import Receipts from "@/pages/receipts";
 import Cash from "@/pages/cash";
-import Transfers from "@/pages/transfers";
 import Invoices from "@/pages/invoices";
-import Adjustments from "@/pages/adjustments";
 import NfseConfigPage from "@/pages/nfse-config";
-import LandlordTransfersReportPage from "@/pages/reports/landlord-transfers";
 import RevenueReportPage from "@/pages/reports/revenue";
 import SystemLogsPage from "@/pages/system-logs";
+import SystemContractsPage from "@/pages/system-contracts";
 import PrintReceiptPage from "@/pages/print-receipt";
 import { AppSidebar } from "@/components/app-sidebar";
 
@@ -79,29 +77,28 @@ function Router() {
     <Switch>
       <Route path="/auth" component={AuthPage} />
       <Route path="/" component={() => <ProtectedRoute component={Dashboard} />} />
-      <Route path="/properties" component={() => <ProtectedRoute component={Properties} />} />
-      <Route path="/tenants" component={() => <ProtectedRoute component={Tenants} />} />
-      <Route path="/guarantors" component={() => <ProtectedRoute component={Guarantors} />} />
-      <Route path="/landlords" component={() => <ProtectedRoute component={Owners} />} />
+      <Route path="/companies" component={() => <ProtectedRoute component={Companies} />} />
+      <Route path="/projects" component={() => <ProtectedRoute component={Projects} />} />
+      <Route path="/projects/partners" component={() => <ProtectedRoute component={() => <Projects mode="partner" />} />} />
+      <Route path="/projects/systems" component={() => <ProtectedRoute component={SystemContractsPage} />} />
+      <Route path="/clients" component={() => <ProtectedRoute component={Clients} />} />
+      <Route path="/analysts" component={() => <ProtectedRoute component={Analysts} />} />
+      <Route path="/partners" component={() => <ProtectedRoute component={Partners} />} />
+      <Route path="/service-catalog" component={() => <ProtectedRoute component={ServiceCatalog} />} />
       <Route path="/contracts" component={() => <ProtectedRoute component={Contracts} />} />
-      <Route path="/services" component={() => <ProtectedRoute component={Maintenance} />} />
-      <Route path="/providers" component={() => <ProtectedRoute component={Providers} />} />
       <Route path="/receipts" component={() => <ProtectedRoute component={Receipts} />} />
       <Route path="/receipts/:id/print" component={() => <PrintRoute component={PrintReceiptPage} />} />
       <Route path="/cash" component={() => <ProtectedRoute component={Cash} />} />
-      <Route path="/transfers" component={() => <ProtectedRoute component={Transfers} />} />
       <Route path="/invoices" component={() => <ProtectedRoute component={Invoices} />} />
-      <Route path="/adjustments" component={() => <ProtectedRoute component={Adjustments} />} />
       <Route path="/nfse/config" component={() => <ProtectedRoute component={NfseConfigPage} />} />
       <Route path="/system/logs" component={() => <ProtectedRoute component={SystemLogsPage} />} />
-      <Route path="/reports/landlord-transfers" component={() => <ProtectedRoute component={LandlordTransfersReportPage} />} />
       <Route path="/reports/revenue" component={() => <ProtectedRoute component={RevenueReportPage} />} />
       <Route component={NotFound} />
     </Switch>
   );
 }
 
-function AppRoot() {
+export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
@@ -113,5 +110,3 @@ function AppRoot() {
     </QueryClientProvider>
   );
 }
-
-export default AppRoot;

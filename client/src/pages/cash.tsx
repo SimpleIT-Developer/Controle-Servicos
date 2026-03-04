@@ -11,15 +11,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { EmptyState } from "@/components/empty-state";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { CashTransaction } from "@shared/schema";
 
 const categories = [
-  "Aluguel",
-  "Taxa de Administração",
-  "Repasse ao Proprietário",
-  "Serviços",
+  "Receita de Contratos",
+  "Serviços Avulsos",
+  "Pagamento de Analistas",
   "Despesas Operacionais",
+  "Impostos",
+  "Retirada de Lucro",
   "Outros",
 ];
 
@@ -216,11 +218,11 @@ export default function CashPage() {
               </Table>
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <DollarSign className="h-12 w-12 text-muted-foreground/50" />
-              <h3 className="mt-4 text-lg font-semibold">Nenhuma transação encontrada</h3>
-              <p className="text-sm text-muted-foreground">Comece adicionando uma nova transação.</p>
-            </div>
+            <EmptyState
+              icon={DollarSign}
+              title="Nenhuma transação encontrada"
+              description="Comece adicionando uma nova transação."
+            />
           )}
         </CardContent>
       </Card>

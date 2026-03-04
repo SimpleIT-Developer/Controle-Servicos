@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DPS xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01">
+  <infDPS Id="DPS355400325234546800011100900000000000000001">
+    
+    <tpAmb>2</tpAmb>
+    <dhEmi>2026-02-03T16:07:37-03:00</dhEmi>
+    <verAplic>EmissorWeb_1.4.0.27</verAplic>
+    <serie>900</serie>
+    <nDPS>1</nDPS>
+    <dCompet>2026-02-03</dCompet>
+    <tpEmit>1</tpEmit>
+    <cLocEmi>3554003</cLocEmi>
+
+    <prest>
+      <CNPJ>52345468000111</CNPJ>
+      <fone>1596547006</fone>
+      <email>RICIERISOLUCOES@GMAIL.COM</email>
+      <regTrib>
+        <opSimpNac>3</opSimpNac>
+        <regApTribSN>1</regApTribSN>
+        <regEspTrib>0</regEspTrib>
+      </regTrib>
+    </prest>
+
+    <toma>
+      <CNPJ>33915604000117</CNPJ>
+      <xNome>LEGIAO DA BOA VONTADE</xNome>
+      <end>
+        <endNac>
+          <cMun>3550308</cMun>
+          <CEP>01131010</CEP>
+        </endNac>
+        <xLgr>SERGIO TOMAS</xLgr>
+        <nro>740</nro>
+        <xCpl>6 AND</xCpl>
+        <xBairro>BOM RETIRO</xBairro>
+      </end>
+    </toma>
+
+    <serv>
+      <locPrest>
+        <cLocPrestacao>3554003</cLocPrestacao>
+      </locPrest>
+      <cServ>
+        <cTribNac>010501</cTribNac>
+        <xDescServ>Descrição da NF</xDescServ>
+        <cNBS>111032200</cNBS>
+      </cServ>
+    </serv>
+
+    <valores>
+      <vServPrest>
+        <vServ>2100.00</vServ>
+      </vServPrest>
+      
+      <trib>
+        <tribMun>
+          <tribISSQN>1</tribISSQN>
+          <tpRetISSQN>1</tpRetISSQN>
+        </tribMun>
+        <tribFed/>
+        <totTrib>
+          <pTotTribSN>15.50</pTotTribSN>
+        </totTrib>
+      </trib>
+    </valores>
+
+  </infDPS>
+</DPS>

@@ -1,0 +1,70 @@
+Produção: https://cdpj.partners.bancointer.com.br/cobranca/v3/cobrancas
+SandBox: https://cdpj-sandbox.partners.uatinter.co/cobranca/v3/cobrancas
+
+{
+  "seuNumero": "123456",
+  "valorNominal": 2.5,
+  "dataVencimento": "2026-10-20",
+  "numDiasAgenda": 60,
+  "pagador": {
+    "email": "nome.sobrenome@x.com.br",
+    "ddd": "31",
+    "telefone": "999999999",
+    "numero": "3456",
+    "complemento": "apartamento 3 bloco 4",
+    "cpfCnpj": "01123456789",
+    "tipoPessoa": "FISICA",
+    "nome": "Nome do pagador",
+    "endereco": "Avenida Brasil, 1200",
+    "bairro": "Centro",
+    "cidade": "Belo Horizonte",
+    "uf": "MG",
+    "cep": "30110000"
+  },
+  "multa": {
+    "taxa": 2,
+    "codigo": "PERCENTUAL"
+  },
+  "mora": {
+    "taxa": 5,
+    "codigo": "TAXAMENSAL"
+  },
+  "mensagem": {
+    "linha1": "mensagem 1",
+    "linha2": "mensagem 2",
+    "linha3": "mensagem 3",
+    "linha4": "mensagem 4",
+    "linha5": "mensagem 5"
+  },
+  "beneficiarioFinal": {
+    "cpfCnpj": "12345678901",
+    "tipoPessoa": "FISICA",
+    "nome": "Nome do beneficiário",
+    "endereco": "Avenida Brasil, 1200",
+    "bairro": "Centro",
+    "cidade": "Belo Horizonte",
+    "uf": "MG",
+    "cep": "30110000"
+  },
+  "formasRecebimento": [
+    "BOLETO",
+    "PIX"
+  ],
+  "notaFiscal": {
+    "chaveNFe": "87268327085470029496566305356486731069319792",
+    "numero": 31231,
+    "serie": 910,
+    "dataEmissao": "2026-01-15",
+    "parcela": 1,
+    "naturezaOperacao": "Venda"
+  }
+}
+
+
+
+Retorno
+{
+"codigoSolicitacao": "183e982a-34e5-4bc0-9643-def5432a"
+}
+
+

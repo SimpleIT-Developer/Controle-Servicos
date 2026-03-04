@@ -1,18 +1,31 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, Search, FileText, Loader2, Calendar, DollarSign, FileMinus } from "lucide-react";
+import { Plus, Pencil, Trash2, FileText, Search, Loader2 } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Contract, Property, Landlord, Tenant, Guarantor } from "@shared/schema";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import { insertContractSchema, type Contract, type Company, type Client, type InsertContract } from "@shared/schema";
+import { format } from "date-fns";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
   active: { label: "Ativo", variant: "default" },
@@ -21,518 +34,328 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
 };
 
 export default function ContractsPage() {
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const { toast } = useToast();
+  const [isOpen, setIsOpen] = useState(false);
   const [editingContract, setEditingContract] = useState<Contract | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const { toast } = useToast();
 
-  const { data: contracts, isLoading, refetch } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
-  const { data: properties } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
-  const { data: landlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
-  const { data: tenants } = useQuery<Tenant[]>({ queryKey: ["/api/tenants"] });
-  const { data: guarantors } = useQuery<Guarantor[]>({ queryKey: ["/api/guarantors"] });
+  const { data: contracts, isLoading } = useQuery<Contract[]>({
+    queryKey: ["/api/contracts"],
+  });
+
+  const { data: companies } = useQuery<Company[]>({
+    queryKey: ["/api/companies"],
+  });
+
+  const { data: clients } = useQuery<Client[]>({
+    queryKey: ["/api/clients"],
+  });
+
+  const form = useForm<InsertContract>({
+    resolver: zodResolver(insertContractSchema),
+    defaultValues: {
+      companyId: "",
+      clientId: "",
+      description: "",
+      startDate: format(new Date(), "yyyy-MM-dd"),
+      endDate: "",
+      dayDue: 5,
+      amount: "0",
+      status: "active",
+    },
+  });
 
   const createMutation = useMutation({
-    mutationFn: async (data: any) => apiRequest("POST", "/api/contracts", data),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
-      await queryClient.invalidateQueries({ queryKey: ["/api/properties"] });
-      await refetch();
-      setIsDialogOpen(false);
-      toast({ title: "Sucesso", description: "Contrato cadastrado com sucesso." });
+    mutationFn: async (data: InsertContract) => {
+      const res = await apiRequest("POST", "/api/contracts", data);
+      return res.json();
     },
-    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+      setIsOpen(false);
+      form.reset();
+      toast({
+        title: "Sucesso",
+        description: "Contrato criado com sucesso.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Erro",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: any }) => apiRequest("PATCH", `/api/contracts/${id}`, data),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
-      await refetch();
-      setIsDialogOpen(false);
-      setEditingContract(null);
-      toast({ title: "Sucesso", description: "Contrato atualizado com sucesso." });
+    mutationFn: async (data: InsertContract) => {
+      if (!editingContract) return;
+      const res = await apiRequest("PATCH", `/api/contracts/${editingContract.id}`, data);
+      return res.json();
     },
-    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+      setIsOpen(false);
+      setEditingContract(null);
+      form.reset();
+      toast({
+        title: "Sucesso",
+        description: "Contrato atualizado com sucesso.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Erro",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async (id: string) => apiRequest("DELETE", `/api/contracts/${id}`),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
-      await refetch();
-      toast({ title: "Sucesso", description: "Contrato excluído com sucesso." });
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/contracts/${id}`);
     },
-    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
-  });
-
-  const deleteDraftReceiptsMutation = useMutation({
-    mutationFn: async (contractId: string) => apiRequest("DELETE", `/api/contracts/${contractId}/draft-receipts`),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      toast({ title: "Sucesso", description: "Recibos em rascunho excluídos com sucesso." });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+      toast({
+        title: "Sucesso",
+        description: "Contrato excluído com sucesso.",
+      });
     },
-    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
 
-  const [formData, setFormData] = useState({
-    propertyId: "",
-    landlordId: "",
-    tenantId: "",
-    guarantorId: "",
-    guaranteeType: "guarantor",
-    startDate: "",
-    duration: 30, // Default duration in months
-    endDate: "",
-    firstDueDate: "",
-    dueDay: 5,
-    rentAmount: "",
-    adminFeePercent: 10,
-    status: "active",
-  });
-
-  const calculateEndDate = (start: string, months: number) => {
-    if (!start) return "";
-    const [year, month, day] = start.split('-').map(Number);
-    const date = new Date(year, month - 1, day);
-    
-    // Add months with clamp
-    date.setMonth(date.getMonth() + months);
-    if (date.getDate() !== day) {
-      date.setDate(0);
-    }
-    
-    // Subtract 1 day
-    date.setDate(date.getDate() - 1);
-    
-    // Format back to YYYY-MM-DD
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  };
-
-  const calculateDuration = (start: string, end: string) => {
-    if (!start || !end) return 30;
-    const [sY, sM, sD] = start.split('-').map(Number);
-    const [eY, eM, eD] = end.split('-').map(Number);
-    
-    const startDate = new Date(sY, sM - 1, sD);
-    const endDate = new Date(eY, eM - 1, eD);
-    
-    // Add 1 day to end date to include the last day in calculation
-    endDate.setDate(endDate.getDate() + 1);
-    
-    let months = (endDate.getFullYear() - startDate.getFullYear()) * 12;
-    months -= startDate.getMonth();
-    months += endDate.getMonth();
-    
-    return months <= 0 ? 30 : months;
-  };
-
-  const handleEditClick = (contract: Contract) => {
-    setEditingContract(contract);
-    const duration = calculateDuration(contract.startDate, contract.endDate);
-    setFormData({
-      propertyId: contract.propertyId,
-      landlordId: contract.landlordId,
-      tenantId: contract.tenantId,
-      guarantorId: contract.guarantorId || "",
-      guaranteeType: contract.guaranteeType || "guarantor",
-      startDate: contract.startDate,
-      duration: duration,
-      endDate: contract.endDate,
-      firstDueDate: contract.firstDueDate || "",
-      dueDay: contract.dueDay,
-      rentAmount: contract.rentAmount.toString(),
-      adminFeePercent: Number(contract.adminFeePercent),
-      status: contract.status,
-    });
-    setIsDialogOpen(true);
-  };
-
-  const handleNewClick = () => {
-    setEditingContract(null);
-    setFormData({
-      propertyId: "",
-      landlordId: "",
-      tenantId: "",
-      guarantorId: "",
-      guaranteeType: "guarantor",
-      startDate: "",
-      duration: 30,
-      endDate: "",
-      firstDueDate: "",
-      dueDay: 5,
-      rentAmount: "",
-      adminFeePercent: 10,
-      status: "active",
-    });
-    setIsDialogOpen(true);
-  };
-
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const data = {
-      ...formData,
-      dueDay: Number(formData.dueDay),
-      rentAmount: formData.rentAmount,
-      adminFeePercent: formData.adminFeePercent.toString(),
-      guarantorId: formData.guarantorId || null,
-      guaranteeType: formData.guaranteeType,
+  const onSubmit = (data: InsertContract) => {
+    // Ensure numbers are handled correctly by the schema validation
+    const formattedData = {
+      ...data,
+      dayDue: Number(data.dayDue),
     };
-
+    
     if (editingContract) {
-      updateMutation.mutate({ id: editingContract.id, data });
+      updateMutation.mutate(formattedData);
     } else {
-      createMutation.mutate(data);
+      createMutation.mutate(formattedData);
     }
   };
 
-  const getPropertyTitle = (id: string) => properties?.find((p) => p.id === id)?.title || "-";
-  const getLandlordName = (id: string) => landlords?.find((l) => l.id === id)?.name || "-";
-  const getTenantName = (id: string) => tenants?.find((t) => t.id === id)?.name || "-";
-  const getGuarantorName = (id: string) => guarantors?.find((g) => g.id === id)?.name || "-";
+  const handleEdit = (contract: Contract) => {
+    setEditingContract(contract);
+    form.reset({
+      ...contract,
+      endDate: contract.endDate || undefined,
+      billingEmails: contract.billingEmails || "",
+    });
+    setIsOpen(true);
+  };
 
-  const filteredContracts = contracts?.filter((c) =>
-    getPropertyTitle(c.propertyId).toLowerCase().includes(searchTerm.toLowerCase()) ||
-    getTenantName(c.tenantId).toLowerCase().includes(searchTerm.toLowerCase())
+  const handleDelete = (id: string) => {
+    if (confirm("Tem certeza que deseja excluir este contrato?")) {
+      deleteMutation.mutate(id);
+    }
+  };
+
+  const filteredContracts = contracts?.filter(contract => 
+    contract.description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    companies?.find(c => c.id === contract.companyId)?.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    clients?.find(c => c.id === contract.clientId)?.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
-
-  const formatDate = (date: string) => new Date(date).toLocaleDateString("pt-BR");
-  const isPending = createMutation.isPending || updateMutation.isPending;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Contratos de Locação</h1>
-          <p className="text-muted-foreground">Gerencie os contratos de aluguel</p>
+          <h1 className="text-2xl font-bold tracking-tight">Contratos</h1>
+          <p className="text-muted-foreground">Gerencie os contratos de prestação de serviços</p>
         </div>
-        <Button onClick={handleNewClick} data-testid="button-new-contract">
-          <Plus className="mr-2 h-4 w-4" />
-          Novo Contrato
-        </Button>
+        <Dialog open={isOpen} onOpenChange={(open) => {
+          setIsOpen(open);
+          if (!open) {
+            setEditingContract(null);
+            form.reset({
+              companyId: "",
+              clientId: "",
+              description: "",
+              startDate: format(new Date(), "yyyy-MM-dd"),
+              endDate: "",
+              dayDue: 5,
+              amount: "0",
+              status: "active",
+              billingEmails: "",
+            });
+          }
+        }}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="mr-2 h-4 w-4" />
+              Novo Contrato
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>{editingContract ? "Editar Contrato" : "Novo Contrato"}</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="companyId">Empresa</Label>
+                  <Select onValueChange={(value) => form.setValue("companyId", value)} defaultValue={form.getValues("companyId")}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione a empresa" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {companies?.map((company) => (
+                        <SelectItem key={company.id} value={company.id}>
+                          {company.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="clientId">Cliente</Label>
+                  <Select onValueChange={(value) => form.setValue("clientId", value)} defaultValue={form.getValues("clientId")}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione o cliente" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {clients?.map((client) => (
+                        <SelectItem key={client.id} value={client.id}>
+                          {client.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="col-span-2 space-y-2">
+                  <Label htmlFor="description">Descrição do Contrato</Label>
+                  <Input id="description" {...form.register("description")} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="startDate">Data Início</Label>
+                  <Input type="date" id="startDate" {...form.register("startDate")} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="endDate">Data Fim (Opcional)</Label>
+                  <Input type="date" id="endDate" {...form.register("endDate")} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="dayDue">Dia Vencimento</Label>
+                  <Input type="number" min="1" max="31" id="dayDue" {...form.register("dayDue")} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="amount">Valor Mensal (R$)</Label>
+                  <Input type="number" step="0.01" id="amount" {...form.register("amount")} />
+                </div>
+                <div className="space-y-2 col-span-2">
+                  <Label htmlFor="billingEmails">Emails para Cobrança</Label>
+                  <Input 
+                    id="billingEmails" 
+                    placeholder="email1@empresa.com, email2@empresa.com" 
+                    {...form.register("billingEmails")} 
+                  />
+                  <p className="text-[0.8rem] text-muted-foreground">
+                    Separe múltiplos emails com vírgula. Se vazio, será usado o email do cliente.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="status">Status</Label>
+                  <Select onValueChange={(value: "active" | "inactive" | "terminated") => form.setValue("status", value)} defaultValue={form.getValues("status")}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">Ativo</SelectItem>
+                      <SelectItem value="inactive">Inativo</SelectItem>
+                      <SelectItem value="terminated">Encerrado</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-2">
+                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
+                  {editingContract ? "Salvar" : "Criar"}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
       </div>
 
-      <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5 text-primary" />
-                Lista de Contratos
-              </CardTitle>
-              <CardDescription>{contracts?.length || 0} contratos cadastrados</CardDescription>
-            </div>
-            <div className="relative w-full sm:w-64">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" data-testid="input-search-contracts" />
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="space-y-3">
-              <Skeleton className="h-12 w-full" />
-              <Skeleton className="h-12 w-full" />
-            </div>
-          ) : filteredContracts && filteredContracts.length > 0 ? (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Imóvel</TableHead>
-                    <TableHead className="hidden md:table-cell">Proprietário</TableHead>
-                    <TableHead className="hidden md:table-cell">Locatário</TableHead>
-                    <TableHead className="hidden lg:table-cell">Período</TableHead>
-                    <TableHead>Aluguel</TableHead>
-                    <TableHead className="hidden md:table-cell">Taxa Adm.</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Ações</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredContracts.map((contract) => (
-                    <TableRow key={contract.id} data-testid={`row-contract-${contract.id}`}>
-                      <TableCell className="font-medium">{getPropertyTitle(contract.propertyId)}</TableCell>
-                      <TableCell className="hidden md:table-cell">{getLandlordName(contract.landlordId)}</TableCell>
-                      <TableCell className="hidden md:table-cell">{getTenantName(contract.tenantId)}</TableCell>
-                      <TableCell className="hidden lg:table-cell">
-                        <div className="flex items-center gap-1 text-sm">
-                          <Calendar className="h-3 w-3 text-muted-foreground" />
-                          {formatDate(contract.startDate)} - {formatDate(contract.endDate)}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          <DollarSign className="h-3 w-3 text-muted-foreground" />
-                          R$ {Number(contract.rentAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                        </div>
-                      </TableCell>
-                      <TableCell className="hidden md:table-cell">{Number(contract.adminFeePercent)}%</TableCell>
-                      <TableCell>
-                        <Badge variant={statusLabels[contract.status]?.variant || "secondary"}>
-                          {statusLabels[contract.status]?.label || contract.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" onClick={() => handleEditClick(contract)}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button size="icon" variant="ghost" onClick={() => deleteDraftReceiptsMutation.mutate(contract.id)} title="Excluir Recibos em Rascunho">
-                            <FileMinus className="h-4 w-4 text-orange-500" />
-                          </Button>
-                          <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(contract.id)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <FileText className="h-12 w-12 text-muted-foreground/50" />
-              <h3 className="mt-4 text-lg font-semibold">Nenhum contrato encontrado</h3>
-              <p className="text-sm text-muted-foreground">Comece adicionando um novo contrato.</p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <div className="flex items-center space-x-2">
+        <Search className="h-4 w-4 text-muted-foreground" />
+        <Input
+          placeholder="Buscar contratos..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="max-w-sm"
+        />
+      </div>
 
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{editingContract ? "Editar Contrato" : "Novo Contrato"}</DialogTitle>
-            <DialogDescription>{editingContract ? "Atualize os dados do contrato." : "Preencha os dados do novo contrato."}</DialogDescription>
-          </DialogHeader>
-          <form key={editingContract ? editingContract.id : 'new'} onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="propertyId">Imóvel *</Label>
-              <Select
-                name="propertyId"
-                value={formData.propertyId}
-                onValueChange={(value) => setFormData({ ...formData, propertyId: value })}
-                required
-              >
-                <SelectTrigger data-testid="select-contract-property">
-                  <SelectValue placeholder="Selecione o imóvel..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {properties?.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.code} - {p.title}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="landlordId">Proprietário *</Label>
-                <Select
-                  name="landlordId"
-                  value={formData.landlordId}
-                  onValueChange={(value) => setFormData({ ...formData, landlordId: value })}
-                  required
-                >
-                  <SelectTrigger data-testid="select-contract-landlord">
-                    <SelectValue placeholder="Selecione..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {landlords?.map((l) => (
-                      <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tenantId">Locatário *</Label>
-                <Select
-                  name="tenantId"
-                  value={formData.tenantId}
-                  onValueChange={(value) => setFormData({ ...formData, tenantId: value })}
-                  required
-                >
-                  <SelectTrigger data-testid="select-contract-tenant">
-                    <SelectValue placeholder="Selecione..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {tenants?.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="guarantorId">Fiador / Garantia</Label>
-                <Select
-                  name="guarantorId"
-                  value={formData.guaranteeType === 'insurance' ? 'insurance' : (formData.guarantorId || 'none')}
-                  onValueChange={(value) => {
-                    if (value === 'insurance') {
-                      setFormData({ ...formData, guaranteeType: 'insurance', guarantorId: '' });
-                    } else if (value === 'none') {
-                      setFormData({ ...formData, guaranteeType: 'none', guarantorId: '' });
-                    } else {
-                      setFormData({ ...formData, guaranteeType: 'guarantor', guarantorId: value });
-                    }
-                  }}
-                >
-                  <SelectTrigger data-testid="select-contract-guarantor">
-                    <SelectValue placeholder="Selecione (Opcional)..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Nenhum</SelectItem>
-                    <SelectItem value="insurance">SEGURO FIANÇA</SelectItem>
-                    {guarantors?.map((g) => (
-                      <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-4">
-              <div className="space-y-2">
-                <Label htmlFor="startDate">Data Início *</Label>
-                <Input
-                  id="startDate"
-                  name="startDate"
-                  type="date"
-                  value={formData.startDate}
-                  onChange={(e) => {
-                    const newStart = e.target.value;
-                    const newEnd = calculateEndDate(newStart, formData.duration);
-                    setFormData({ ...formData, startDate: newStart, endDate: newEnd });
-                  }}
-                  required
-                  data-testid="input-contract-start"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="duration">Prazo *</Label>
-                <Select
-                  name="duration"
-                  value={formData.duration.toString()}
-                  onValueChange={(value) => {
-                    const newDuration = Number(value);
-                    const newEnd = calculateEndDate(formData.startDate, newDuration);
-                    setFormData({ ...formData, duration: newDuration, endDate: newEnd });
-                  }}
-                >
-                  <SelectTrigger data-testid="select-contract-duration">
-                    <SelectValue placeholder="Selecione..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="12">12 meses (1 ano)</SelectItem>
-                    <SelectItem value="24">24 meses (2 anos)</SelectItem>
-                    <SelectItem value="30">30 meses (2,5 anos)</SelectItem>
-                    <SelectItem value="36">36 meses (3 anos)</SelectItem>
-                    <SelectItem value="48">48 meses (4 anos)</SelectItem>
-                    <SelectItem value="60">60 meses (5 anos)</SelectItem>
-                    {/* Add custom option if the current duration is not in the list */}
-                    {![12, 24, 30, 36, 48, 60].includes(formData.duration) && (
-                      <SelectItem value={formData.duration.toString()}>{formData.duration} meses</SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="endDate">Data Fim</Label>
-                <Input
-                  id="endDate"
-                  name="endDate"
-                  type="date"
-                  value={formData.endDate}
-                  readOnly
-                  className="bg-muted"
-                  data-testid="input-contract-end"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="firstDueDate" className="whitespace-nowrap">Primeiro Vencimento *</Label>
-                <Input
-                  id="firstDueDate"
-                  name="firstDueDate"
-                  type="date"
-                  value={formData.firstDueDate}
-                  onChange={(e) => setFormData({ ...formData, firstDueDate: e.target.value })}
-                  required
-                  data-testid="input-contract-first-due"
-                />
-              </div>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="space-y-2">
-                <Label htmlFor="dueDay">Dia Vencimento *</Label>
-                <Input
-                  id="dueDay"
-                  name="dueDay"
-                  type="number"
-                  min="1"
-                  max="31"
-                  value={formData.dueDay}
-                  onChange={(e) => setFormData({ ...formData, dueDay: Number(e.target.value) })}
-                  required
-                  data-testid="input-contract-due"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="rentAmount">Aluguel (R$) *</Label>
-                <Input
-                  id="rentAmount"
-                  name="rentAmount"
-                  type="number"
-                  step="0.01"
-                  value={formData.rentAmount}
-                  onChange={(e) => setFormData({ ...formData, rentAmount: e.target.value })}
-                  required
-                  data-testid="input-contract-rent"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="adminFeePercent">Taxa Adm. (%) *</Label>
-                <Input
-                  id="adminFeePercent"
-                  name="adminFeePercent"
-                  type="number"
-                  step="0.01"
-                  value={formData.adminFeePercent}
-                  onChange={(e) => setFormData({ ...formData, adminFeePercent: Number(e.target.value) })}
-                  required
-                  data-testid="input-contract-fee"
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="status">Status *</Label>
-              <Select
-                name="status"
-                value={formData.status}
-                onValueChange={(value) => setFormData({ ...formData, status: value })}
-              >
-                <SelectTrigger data-testid="select-contract-status">
-                  <SelectValue placeholder="Selecione..." />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active">Ativo</SelectItem>
-                  <SelectItem value="inactive">Inativo</SelectItem>
-                  <SelectItem value="terminated">Encerrado</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>
-              <Button type="submit" disabled={isPending} data-testid="button-save-contract">
-                {isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                {editingContract ? "Salvar" : "Cadastrar"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {isLoading ? (
+          <div className="col-span-full flex justify-center py-8">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        ) : filteredContracts && filteredContracts.length === 0 ? (
+          <EmptyState 
+            icon={FileText}
+            title={searchTerm ? "Nenhum contrato encontrado" : "Nenhum contrato cadastrado"}
+            description={searchTerm ? "Tente buscar com outros termos." : "Comece adicionando um novo contrato."}
+          />
+        ) : (
+          filteredContracts?.map((contract) => {
+          const company = companies?.find(c => c.id === contract.companyId);
+          const client = clients?.find(c => c.id === contract.clientId);
+          
+          return (
+            <Card key={contract.id}>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <div className="space-y-1">
+                  <CardTitle className="text-sm font-medium line-clamp-1">
+                    {contract.description}
+                  </CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    {company?.tradeName || company?.name}
+                  </p>
+                </div>
+                <FileText className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">R$ {Number(contract.amount).toFixed(2)}</div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Cliente: {client?.name}
+                </p>
+                <div className="flex items-center gap-2 mt-2">
+                  <span className={`text-xs px-2 py-1 rounded-full ${
+                    contract.status === 'active' ? 'bg-green-100 text-green-700' :
+                    contract.status === 'inactive' ? 'bg-gray-100 text-gray-700' :
+                    'bg-red-100 text-red-700'
+                  }`}>
+                    {statusLabels[contract.status]?.label || contract.status}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Vence dia {contract.dayDue}
+                  </span>
+                </div>
+                <div className="mt-4 flex justify-end space-x-2">
+                  <Button variant="ghost" size="icon" onClick={() => handleEdit(contract)}>
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" onClick={() => handleDelete(contract.id)}>
+                    <Trash2 className="h-4 w-4 text-red-500" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        }))}
+      </div>
     </div>
   );
 }

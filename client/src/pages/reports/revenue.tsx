@@ -1,28 +1,14 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, FileDown, Calendar, Building2, User, Printer, TrendingUp, ArrowUpRight, ArrowDownLeft } from "lucide-react";
+import { Search, FileDown, Calendar, User, Printer, TrendingUp, Building2, Briefcase } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { RevenueReportItem } from "@shared/schema"; // Use shared if possible, or define locally
-
-// Defining locally as it's not in shared schema yet (it's in storage.ts)
-interface RevenueReportItem {
-  receiptId: string;
-  propertyCode: string;
-  landlordName: string;
-  tenantName: string;
-  refYear: number;
-  refMonth: number;
-  rentAmount: string;
-  adminFeeAmount: string;
-  transferAmount: string | null;
-  status: string;
-}
+import type { Receipt, Contract, Client, Company } from "@shared/schema";
 
 const months = [
   { value: "1", label: "Janeiro" }, { value: "2", label: "Fevereiro" }, { value: "3", label: "Março" },
@@ -40,29 +26,46 @@ export default function RevenueReportPage() {
   const [searchTerm, setSearchTerm] = useState("");
 
   // Queries
-  const { data: revenueItems, isLoading } = useQuery<RevenueReportItem[]>({
-    queryKey: ["/api/reports/revenue", filterYear, filterMonth],
+  const { data: receipts, isLoading: isLoadingReceipts } = useQuery<Receipt[]>({
+    queryKey: ["/api/receipts", filterYear, filterMonth],
     queryFn: async () => {
-      const res = await fetch(`/api/reports/revenue?year=${filterYear}&month=${filterMonth}`);
-      if (!res.ok) throw new Error("Failed to fetch report");
+      const res = await fetch(`/api/receipts?year=${filterYear}&month=${filterMonth}`);
+      if (!res.ok) throw new Error("Failed to fetch receipts");
       return res.json();
     }
   });
 
+  const { data: contracts } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
+  const { data: clients } = useQuery<Client[]>({ queryKey: ["/api/clients"] });
+  const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const isLoading = isLoadingReceipts || !contracts || !clients || !companies;
+
   // Filter logic
-  const filteredItems = revenueItems?.filter(item => {
+  const filteredItems = receipts?.map(receipt => {
+    const contract = contracts?.find(c => c.id === receipt.contractId);
+    const client = clients?.find(c => c.id === contract?.clientId);
+    const company = companies?.find(c => c.id === contract?.companyId);
+
+    return {
+      ...receipt,
+      contractDescription: contract?.description || "N/A",
+      clientName: client?.name || "N/A",
+      companyName: company?.tradeName || company?.name || "N/A",
+    };
+  }).filter(item => {
     const search = searchTerm.toLowerCase();
-    const landlordName = item.landlordName?.toLowerCase() || "";
-    const tenantName = item.tenantName?.toLowerCase() || "";
-    const propertyCode = item.propertyCode?.toLowerCase() || "";
+    const clientName = item.clientName.toLowerCase();
+    const companyName = item.companyName.toLowerCase();
+    const contractDesc = item.contractDescription.toLowerCase();
     
-    return landlordName.includes(search) || tenantName.includes(search) || propertyCode.includes(search);
+    return clientName.includes(search) || companyName.includes(search) || contractDesc.includes(search);
   });
 
   // Totals
-  const totalRent = filteredItems?.reduce((sum, item) => sum + Number(item.rentAmount), 0) || 0;
-  const totalFee = filteredItems?.reduce((sum, item) => sum + Number(item.adminFeeAmount), 0) || 0;
-  const totalTransfer = filteredItems?.reduce((sum, item) => sum + (Number(item.transferAmount) || 0), 0) || 0;
+  const totalBase = filteredItems?.reduce((sum, item) => sum + Number(item.amount), 0) || 0;
+  const totalServices = filteredItems?.reduce((sum, item) => sum + Number(item.servicesAmount), 0) || 0;
+  const totalDue = filteredItems?.reduce((sum, item) => sum + Number(item.totalDue), 0) || 0;
 
   return (
     <div className="space-y-6">
@@ -103,8 +106,8 @@ export default function RevenueReportPage() {
       <div className="space-y-6 print:hidden">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Relatório de Receita</h1>
-            <p className="text-muted-foreground">Receita, Repasses e Taxas por mês de referência</p>
+            <h1 className="text-2xl font-bold tracking-tight">Relatório de Faturamento</h1>
+            <p className="text-muted-foreground">Faturamento por contrato e mês de referência</p>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => window.print()}>
@@ -150,7 +153,7 @@ export default function RevenueReportPage() {
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Buscar por proprietário, inquilino ou código..."
+                  placeholder="Buscar por cliente, empresa ou contrato..."
                   className="pl-8"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
@@ -171,44 +174,40 @@ export default function RevenueReportPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Cód.</TableHead>
-                        <TableHead>Proprietário</TableHead>
-                        <TableHead>Inquilino</TableHead>
-                        <TableHead className="text-right">Aluguel Pago</TableHead>
-                        <TableHead className="text-right">Repasse Pago</TableHead>
-                        <TableHead className="text-right">Receita (Taxa)</TableHead>
+                        <TableHead>Contrato</TableHead>
+                        <TableHead>Empresa</TableHead>
+                        <TableHead>Cliente</TableHead>
+                        <TableHead className="text-right">Valor Base</TableHead>
+                        <TableHead className="text-right">Extras</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {filteredItems.map((item) => (
-                        <TableRow key={item.receiptId}>
+                        <TableRow key={item.id}>
                           <TableCell className="font-medium">
-                            {item.propertyCode}
+                            {item.contractDescription}
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <User className="h-4 w-4 text-muted-foreground" />
-                              <span className="truncate max-w-[150px]" title={item.landlordName}>{item.landlordName}</span>
+                              <Building2 className="h-4 w-4 text-muted-foreground" />
+                              <span className="truncate max-w-[150px]" title={item.companyName}>{item.companyName}</span>
                             </div>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <User className="h-4 w-4 text-muted-foreground" />
-                              <span className="truncate max-w-[150px]" title={item.tenantName}>{item.tenantName}</span>
+                              <span className="truncate max-w-[150px]" title={item.clientName}>{item.clientName}</span>
                             </div>
                           </TableCell>
                           <TableCell className="text-right">
-                            R$ {Number(item.rentAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                            R$ {Number(item.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                           </TableCell>
                           <TableCell className="text-right">
-                            {item.transferAmount ? (
-                              `R$ ${Number(item.transferAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
-                            ) : (
-                              <span className="text-muted-foreground">-</span>
-                            )}
+                            R$ {Number(item.servicesAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                           </TableCell>
                           <TableCell className="text-right font-medium text-green-600">
-                            R$ {Number(item.adminFeeAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                            R$ {Number(item.totalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -219,34 +218,36 @@ export default function RevenueReportPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t">
                   <div className="flex flex-col items-center p-3 bg-muted/20 rounded-lg border">
                      <span className="text-sm text-muted-foreground flex items-center gap-2">
-                       <ArrowDownLeft className="h-4 w-4" /> Total Aluguel
+                       <Briefcase className="h-4 w-4" /> Total Base
                      </span>
                      <span className="text-lg font-bold">
-                       R$ {totalRent.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                       R$ {totalBase.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                      </span>
                   </div>
                   <div className="flex flex-col items-center p-3 bg-muted/20 rounded-lg border">
                      <span className="text-sm text-muted-foreground flex items-center gap-2">
-                       <ArrowUpRight className="h-4 w-4" /> Total Repasse
+                       <TrendingUp className="h-4 w-4" /> Total Extras
                      </span>
-                     <span className="text-lg font-bold text-orange-600">
-                       R$ {totalTransfer.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                     <span className="text-lg font-bold text-blue-600">
+                       R$ {totalServices.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                      </span>
                   </div>
                   <div className="flex flex-col items-center p-3 bg-green-50/50 rounded-lg border border-green-100">
                      <span className="text-sm text-green-700 flex items-center gap-2">
-                       <TrendingUp className="h-4 w-4" /> Total Receita (Taxas)
+                       <TrendingUp className="h-4 w-4" /> Faturamento Total
                      </span>
                      <span className="text-xl font-bold text-green-700">
-                       R$ {totalFee.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                       R$ {totalDue.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                      </span>
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="text-center py-8 text-muted-foreground">
-                Nenhuma receita encontrada para este período.
-              </div>
+              <EmptyState
+                icon={TrendingUp}
+                title="Nenhum faturamento encontrado"
+                description="Nenhum faturamento encontrado para este período."
+              />
             )}
           </CardContent>
         </Card>
@@ -257,8 +258,8 @@ export default function RevenueReportPage() {
         <div className="border-b pb-4 mb-6">
           <div className="flex justify-between items-end">
             <div>
-              <h1 className="text-2xl font-bold uppercase tracking-wider text-black">Relatório de Receita</h1>
-              <p className="text-sm text-gray-500 mt-1">Imobiliária Demo System</p>
+              <h1 className="text-2xl font-bold uppercase tracking-wider text-black">Relatório de Faturamento</h1>
+              <p className="text-sm text-gray-500 mt-1">Controle de Serviços</p>
             </div>
             <div className="text-right">
               <p className="text-sm text-gray-600">Referência: <span className="font-semibold text-black">{months.find(m => m.value === String(filterMonth))?.label} / {filterYear}</span></p>
@@ -271,30 +272,28 @@ export default function RevenueReportPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b-2 border-black">
-                <th className="text-left py-2 font-bold text-black uppercase">Cód.</th>
-                <th className="text-left py-2 font-bold text-black uppercase">Proprietário</th>
-                <th className="text-left py-2 font-bold text-black uppercase">Inquilino</th>
-                <th className="text-right py-2 font-bold text-black uppercase">Aluguel</th>
-                <th className="text-right py-2 font-bold text-black uppercase">Repasse</th>
-                <th className="text-right py-2 font-bold text-black uppercase">Receita (Taxa)</th>
+                <th className="text-left py-2 font-bold text-black uppercase">Contrato</th>
+                <th className="text-left py-2 font-bold text-black uppercase">Empresa</th>
+                <th className="text-left py-2 font-bold text-black uppercase">Cliente</th>
+                <th className="text-right py-2 font-bold text-black uppercase">Base</th>
+                <th className="text-right py-2 font-bold text-black uppercase">Extras</th>
+                <th className="text-right py-2 font-bold text-black uppercase">Total</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {filteredItems?.map((item) => (
-                <tr key={item.receiptId}>
-                  <td className="py-2 text-black font-medium">{item.propertyCode}</td>
-                  <td className="py-2 text-gray-700">{item.landlordName}</td>
-                  <td className="py-2 text-gray-700">{item.tenantName}</td>
+                <tr key={item.id}>
+                  <td className="py-2 text-black font-medium">{item.contractDescription}</td>
+                  <td className="py-2 text-gray-700">{item.companyName}</td>
+                  <td className="py-2 text-gray-700">{item.clientName}</td>
                   <td className="py-2 text-right text-black">
-                    R$ {Number(item.rentAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    R$ {Number(item.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                   </td>
                   <td className="py-2 text-right text-black">
-                    {item.transferAmount ? 
-                      `R$ ${Number(item.transferAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : 
-                      '-'}
+                    R$ {Number(item.servicesAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                   </td>
                   <td className="py-2 text-right font-bold text-black">
-                    R$ {Number(item.adminFeeAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    R$ {Number(item.totalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                   </td>
                 </tr>
               ))}
@@ -310,22 +309,22 @@ export default function RevenueReportPage() {
         <div className="border-t-2 border-black pt-4 mt-8 break-inside-avoid">
           <div className="flex justify-end gap-12">
             <div className="text-right">
-              <p className="text-xs uppercase text-gray-500 mb-1">Total Aluguel</p>
-              <p className="text-lg font-bold text-gray-700">R$ {totalRent.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+              <p className="text-xs uppercase text-gray-500 mb-1">Total Base</p>
+              <p className="text-lg font-bold text-gray-700">R$ {totalBase.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
             </div>
             <div className="text-right">
-              <p className="text-xs uppercase text-gray-500 mb-1">Total Repasse</p>
-              <p className="text-lg font-bold text-gray-700">R$ {totalTransfer.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+              <p className="text-xs uppercase text-gray-500 mb-1">Total Extras</p>
+              <p className="text-lg font-bold text-gray-700">R$ {totalServices.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
             </div>
             <div className="text-right">
-              <p className="text-xs uppercase text-gray-500 mb-1">Total Receita</p>
-              <p className="text-xl font-bold text-black">R$ {totalFee.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+              <p className="text-xs uppercase text-gray-500 mb-1">Faturamento Total</p>
+              <p className="text-xl font-bold text-black">R$ {totalDue.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
             </div>
           </div>
         </div>
         
         <div className="fixed bottom-0 left-0 w-full text-center border-t border-gray-200 pt-2 pb-2">
-          <p className="text-[10px] text-gray-400">Imob Simple - Sistema de Gestão Imobiliária</p>
+          <p className="text-[10px] text-gray-400">Controle de Serviços - Sistema de Gestão</p>
         </div>
       </div>
     </div>

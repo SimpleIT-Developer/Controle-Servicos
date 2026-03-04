@@ -40,8 +40,8 @@ export default function LoginPage() {
             <Building2 className="h-8 w-8" />
           </div>
           <div>
-            <CardTitle className="text-2xl font-bold">Imobiliária Simples</CardTitle>
-            <CardDescription className="mt-2">Sistema de Gestão Imobiliária</CardDescription>
+            <CardTitle className="text-2xl font-bold">Controle de Serviços</CardTitle>
+            <CardDescription className="mt-2">Sistema de Gestão de Serviços</CardDescription>
           </div>
         </CardHeader>
         <CardContent>

@@ -1,19 +1,15 @@
-import { Building2, FileText, Receipt, DollarSign, TrendingUp, AlertCircle, Users, Send, CheckCircle } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Building2, FileText, Receipt, TrendingUp, AlertCircle, Users, CheckCircle } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 
 interface DashboardStats {
   activeContracts: number;
-  totalProperties: number;
+  totalCompanies: number;
+  totalClients: number;
   openReceipts: number;
   paidReceipts: number;
-  pendingPayments: number;
-  pendingTransfers: number;
   monthlyRevenue: string;
-  totalLandlords: number;
-  totalTenants: number;
 }
 
 function StatCard({ 
@@ -90,161 +86,69 @@ export default function DashboardPage() {
         <p className="text-muted-foreground">Visão geral do sistema - {currentMonth}</p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {isLoading ? (
           <>
             <StatCardSkeleton />
             <StatCardSkeleton />
             <StatCardSkeleton />
             <StatCardSkeleton />
-            <StatCardSkeleton />
           </>
-        ) : (
+        ) : stats ? (
           <>
             <StatCard
-              title="Contratos Ativos"
-              value={stats?.activeContracts || 0}
-              description="Em vigor atualmente"
-              icon={FileText}
+              title="Receita Mensal"
+              value={`R$ ${stats.monthlyRevenue}`}
+              description="Total recebido no mês"
+              icon={TrendingUp}
               variant="success"
             />
             <StatCard
-              title="Imóveis Cadastrados"
-              value={stats?.totalProperties || 0}
-              description={`${stats?.totalLandlords || 0} proprietários`}
-              icon={Building2}
+              title="Contratos Ativos"
+              value={stats.activeContracts}
+              description="Total de contratos vigentes"
+              icon={FileText}
             />
             <StatCard
-              title="Recibos do Mês"
-              value={stats?.openReceipts || 0}
-              description="Aguardando fechamento"
-              icon={Receipt}
-              variant={stats?.openReceipts && stats.openReceipts > 0 ? "warning" : "default"}
+              title="Recibos em Aberto"
+              value={stats.openReceipts}
+              description="Aguardando pagamento"
+              icon={AlertCircle}
+              variant="warning"
             />
             <StatCard
               title="Recibos Pagos"
-              value={stats?.paidReceipts || 0}
+              value={stats.paidReceipts}
               description="Pagos neste mês"
               icon={CheckCircle}
               variant="success"
             />
-            <StatCard
-              title="Repasses Pendentes"
-              value={stats?.pendingTransfers || 0}
-              description="Aguardando pagamento"
-              icon={Send}
-              variant={stats?.pendingTransfers && stats.pendingTransfers > 0 ? "warning" : "default"}
-            />
           </>
-        )}
+        ) : null}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <DollarSign className="h-5 w-5 text-primary" />
-              Resumo Financeiro
-            </CardTitle>
-            <CardDescription>Valores do mês atual</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {isLoading ? (
-              <div className="space-y-3">
-                <Skeleton className="h-12 w-full" />
-                <Skeleton className="h-12 w-full" />
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-md bg-green-500/10">
-                      <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">Receita Estimada</p>
-                      <p className="text-xs text-muted-foreground">Baseado nos recibos fechados</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-lg font-bold text-green-600 dark:text-green-400">
-                      R$ {stats?.monthlyRevenue || "0,00"}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-md bg-yellow-500/10">
-                      <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">Pagamentos Pendentes</p>
-                      <p className="text-xs text-muted-foreground">Recibos não pagos</p>
-                    </div>
-                  </div>
-                  <Badge variant="secondary">{stats?.pendingPayments || 0} recibos</Badge>
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Users className="h-5 w-5 text-primary" />
-              Cadastros
-            </CardTitle>
-            <CardDescription>Total de registros no sistema</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="space-y-3">
-                <Skeleton className="h-12 w-full" />
-                <Skeleton className="h-12 w-full" />
-              </div>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
-                  <div className="p-2 rounded-md bg-primary/10">
-                    <Building2 className="h-4 w-4 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-lg font-bold">{stats?.totalProperties || 0}</p>
-                    <p className="text-xs text-muted-foreground">Imóveis</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
-                  <div className="p-2 rounded-md bg-primary/10">
-                    <Users className="h-4 w-4 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-lg font-bold">{stats?.totalLandlords || 0}</p>
-                    <p className="text-xs text-muted-foreground">Proprietários</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
-                  <div className="p-2 rounded-md bg-primary/10">
-                    <Users className="h-4 w-4 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-lg font-bold">{stats?.totalTenants || 0}</p>
-                    <p className="text-xs text-muted-foreground">Locatários</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
-                  <div className="p-2 rounded-md bg-primary/10">
-                    <FileText className="h-4 w-4 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-lg font-bold">{stats?.activeContracts || 0}</p>
-                    <p className="text-xs text-muted-foreground">Contratos</p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {isLoading ? (
+          <>
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+          </>
+        ) : stats ? (
+          <>
+            <StatCard
+              title="Empresas"
+              value={stats.totalCompanies}
+              description="Empresas cadastradas"
+              icon={Building2}
+            />
+            <StatCard
+              title="Clientes"
+              value={stats.totalClients}
+              description="Clientes cadastrados"
+              icon={Users}
+            />
+          </>
+        ) : null}
       </div>
     </div>
   );

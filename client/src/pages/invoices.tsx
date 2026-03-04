@@ -1,15 +1,17 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Search, FileCheck, Loader2, Check, AlertCircle, FileText, Trash2, Ban, Download, RefreshCw, Eye, Printer } from "lucide-react";
+import { Search, FileCheck, Loader2, Check, AlertCircle, FileText, Trash2, Ban, Download, RefreshCw, Eye, Printer, Wrench, Mail, Barcode, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { EmptyState } from "@/components/empty-state";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Invoice, Landlord, Receipt, Contract, Property, NfseEmissao } from "@shared/schema";
+import type { Invoice, Company, Client, Receipt, Contract, NfseEmissao, SystemContract } from "@shared/schema";
 import {
   Dialog,
   DialogContent,
@@ -17,6 +19,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: any }> = {
   draft: { label: "Rascunho", variant: "outline", icon: FileText },
@@ -26,23 +37,122 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
   PENDENTE: { label: "Pendente", variant: "secondary", icon: Loader2 },
   ENVIANDO: { label: "Enviando", variant: "secondary", icon: Loader2 },
   EMITIDA: { label: "NFS-e Emitida", variant: "default", icon: Check },
+  CANCELADA: { label: "NFS-e Cancelada", variant: "secondary", icon: Ban },
   FALHOU: { label: "Falha Emissão", variant: "destructive", icon: AlertCircle },
+  BOLETO_EMITIDO: { label: "Boleto Emitido", variant: "default", icon: Barcode },
 };
 
 export default function InvoicesPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedEmissao, setSelectedEmissao] = useState<NfseEmissao | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [isManualFixOpen, setIsManualFixOpen] = useState(false);
+  const [manualFixEmissao, setManualFixEmissao] = useState<NfseEmissao | null>(null);
+  
+  // Form States for Manual Fix
+  const [manualStatus, setManualStatus] = useState("");
+  const [manualNumero, setManualNumero] = useState("");
+  const [manualChave, setManualChave] = useState("");
+  const [manualErro, setManualErro] = useState("");
+  const [selectedInvoices, setSelectedInvoices] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  const batchDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await apiRequest("POST", "/api/invoices/batch-delete", { ids });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ title: "Sucesso", description: `${data.count} notas fiscais excluídas.` });
+      setSelectedInvoices([]);
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const toggleSelectAll = () => {
+    // Filter out non-deletable invoices (EMITIDA)
+    const deletableInvoices = filteredInvoices?.filter(i => {
+       const emissao = getNfseEmissao(i.id);
+       const status = emissao ? emissao.status : i.status;
+       return status !== "EMITIDA";
+    }) || [];
+
+    const deletableIds = deletableInvoices.map(i => i.id);
+    
+    // Check if all *deletable* invoices are currently selected
+    const allDeletableSelected = deletableIds.length > 0 && deletableIds.every(id => selectedInvoices.includes(id));
+
+    if (allDeletableSelected) {
+      // Unselect all deletable ones (keep others if any? No, clear all is safer/simpler UX usually, 
+      // but if we want to toggle group, we usually clear selection)
+      setSelectedInvoices([]);
+    } else {
+      setSelectedInvoices(deletableIds);
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    if (selectedInvoices.includes(id)) {
+      setSelectedInvoices(selectedInvoices.filter(i => i !== id));
+    } else {
+      setSelectedInvoices([...selectedInvoices, id]);
+    }
+  };
+
+
+  const manualUpdateNfseMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+      const res = await apiRequest("PATCH", `/api/nfse/emissoes/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/nfse/emissoes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({ title: "Sucesso", description: "Status atualizado manualmente." });
+      setIsManualFixOpen(false);
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const issueBoletoMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/invoices/${id}/boleto`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({ title: "Sucesso", description: "Boleto emitido com sucesso" });
+    },
+    onError: (error: any) => toast({ title: "Erro ao emitir boleto", description: error.message, variant: "destructive" }),
+  });
+
+  const cancelBoletoMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/invoices/${id}/boleto/cancel`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({ title: "Sucesso", description: "Boleto cancelado/liberado com sucesso" });
+    },
+    onError: (error: any) => toast({ title: "Erro ao cancelar boleto", description: error.message, variant: "destructive" }),
+  });
 
   const { data: invoices, isLoading: isLoadingInvoices } = useQuery<Invoice[]>({ queryKey: ["/api/invoices"] });
-  const { data: landlords, isLoading: isLoadingLandlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
+  const { data: companies, isLoading: isLoadingCompanies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: clients, isLoading: isLoadingClients } = useQuery<Client[]>({ queryKey: ["/api/clients"] });
   const { data: receipts, isLoading: isLoadingReceipts } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
   const { data: contracts, isLoading: isLoadingContracts } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
-  const { data: properties, isLoading: isLoadingProperties } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
   const { data: emissoes, isLoading: isLoadingEmissoes } = useQuery<NfseEmissao[]>({ queryKey: ["/api/nfse/emissoes"] });
 
-  const isLoading = isLoadingInvoices || isLoadingLandlords || isLoadingReceipts || isLoadingContracts || isLoadingProperties || isLoadingEmissoes;
+  const isLoading = isLoadingInvoices || isLoadingCompanies || isLoadingClients || isLoadingReceipts || isLoadingContracts || isLoadingEmissoes;
 
+  const getCompanyName = (invoice: Invoice) => {
+    return invoice.providerName || companies?.find(c => c.id === invoice.companyId)?.name || "-";
+  };
+  
   const processNfseMutation = useMutation({
     mutationFn: async (emissaoId: string) => {
       const res = await apiRequest("POST", `/api/nfse/emissoes/${emissaoId}/processar`);
@@ -56,6 +166,18 @@ export default function InvoicesPage() {
       } else {
         toast({ title: "Falha", description: data.message || "Erro ao emitir NFS-e", variant: "destructive" });
       }
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const sendEmailMutation = useMutation({
+    mutationFn: async (invoiceId: string) => {
+      const res = await apiRequest("POST", `/api/invoices/${invoiceId}/send-email`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({ title: "Sucesso", description: data.message });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -78,6 +200,7 @@ export default function InvoicesPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
       queryClient.invalidateQueries({ queryKey: ["/api/nfse/emissoes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       toast({ title: "Sucesso", description: "Pedido de cancelamento enviado." });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
@@ -98,18 +221,31 @@ export default function InvoicesPage() {
   const issueInvoiceMutation = useMutation({
     mutationFn: async (invoice: Invoice) => {
       // 1. Criar emissão
-      const landlord = landlords?.find(l => l.id === invoice.landlordId);
+      // Tenta encontrar o cliente pelo ID ou pelo nome (fallback) para garantir que temos o documento
+      let client = invoice.clientId ? clients?.find(c => c.id === invoice.clientId) : null;
+      if (!client && invoice.borrowerName) {
+         // Normaliza para comparação (remove espaços extras, lowercase)
+         const searchName = invoice.borrowerName.trim().toLowerCase();
+         client = clients?.find(c => c.name.trim().toLowerCase() === searchName || c.name.toLowerCase().includes(searchName));
+      }
+
+      const company = invoice.companyId ? companies?.find(c => c.id === invoice.companyId) : null;
       const receipt = receipts?.find(r => r.id === invoice.receiptId);
       const contract = contracts?.find(c => c.id === receipt?.contractId);
-      const property = properties?.find(p => p.id === contract?.propertyId);
       
+      const tomadorDoc = client?.doc || invoice.borrowerDoc || "";
+
+      if (!tomadorDoc) {
+        throw new Error(`Documento (CPF/CNPJ) do tomador não encontrado para ${client?.name || invoice.borrowerName}. Verifique o cadastro do cliente.`);
+      }
+
       const payload = {
         origemId: invoice.id,
         origemTipo: "INVOICE",
         valor: invoice.amount,
-        tomadorNome: landlord?.name || "Desconhecido",
-        tomadorCpfCnpj: landlord?.doc || "", 
-        discriminacao: `Serviço de administração de imóveis - Ref: ${receipt?.refMonth}/${receipt?.refYear} - ${property?.address || ''}`
+        tomadorNome: client?.name || invoice.borrowerName || "Desconhecido",
+        tomadorCpfCnpj: tomadorDoc, 
+        discriminacao: `Serviços prestados - Ref: ${receipt?.refMonth}/${receipt?.refYear} - ${contract?.description || 'Serviços de Tecnologia'}`
       };
 
       // Use Batch endpoint for consistency
@@ -124,18 +260,28 @@ export default function InvoicesPage() {
       }
       return emissao;
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/nfse/emissoes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+    },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
 
-  const getLandlordName = (landlordId: string) => landlords?.find((l) => l.id === landlordId)?.name || "-";
-
+  const getClientName = (invoice: Invoice) => {
+    if (invoice.clientId) {
+      const client = clients?.find((c) => c.id === invoice.clientId);
+      return client?.name || invoice.borrowerName || "-";
+    }
+    return invoice.borrowerName || "-";
+  };
+  
   const getReceiptInfo = (receiptId: string) => {
     const receipt = receipts?.find((r) => r.id === receiptId);
-    if (!receipt) return { property: "-", ref: "-" };
+    if (!receipt) return { contract: "-", ref: "-" };
     const contract = contracts?.find((c) => c.id === receipt.contractId);
-    const property = properties?.find((p) => p.id === contract?.propertyId);
     return {
-      property: property?.title || "-",
+      contract: contract?.description || "-",
       ref: `${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}`,
     };
   };
@@ -145,17 +291,31 @@ export default function InvoicesPage() {
   };
 
   const filteredInvoices = invoices?.filter((i) => {
-    const landlord = getLandlordName(i.landlordId);
+    const client = getClientName(i);
+    const company = getCompanyName(i);
     const receipt = getReceiptInfo(i.receiptId);
-    return (
-      landlord.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      receipt.property.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    
+    const matchesSearch = (
+      client.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      company.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      receipt.contract.toLowerCase().includes(searchTerm.toLowerCase()) ||
       i.number?.includes(searchTerm)
     );
+
+    const emissao = getNfseEmissao(i.id);
+    let displayStatus = emissao ? emissao.status : i.status;
+    // Se tiver boleto emitido e status não for de erro/cancelamento, considera como boleto emitido para filtro
+    if (i.boletoStatus === 'ISSUED' && !['FALHOU', 'CANCELADA', 'error', 'cancelled'].includes(displayStatus)) {
+         displayStatus = 'BOLETO_EMITIDO';
+    }
+
+    const matchesStatus = statusFilter === "all" || displayStatus === statusFilter;
+
+    return matchesSearch && matchesStatus;
   });
 
-  const draftCount = invoices?.filter((i) => i.status === "draft").length || 0;
-  const issuedCount = invoices?.filter((i) => i.status === "issued" || (getNfseEmissao(i.id)?.status === 'EMITIDA')).length || 0;
+  const draftCount = invoices?.filter((i) => i.status === "draft" || i.status === "PENDENTE").length || 0;
+  const issuedCount = invoices?.filter((i) => i.status === "issued" || i.status === "EMITIDA" || (getNfseEmissao(i.id)?.status === 'EMITIDA')).length || 0;
 
   return (
     <div className="space-y-6">
@@ -203,9 +363,37 @@ export default function InvoicesPage() {
               </CardTitle>
               <CardDescription>{invoices?.length || 0} notas registradas</CardDescription>
             </div>
-            <div className="relative w-full sm:w-64">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" data-testid="input-search-invoices" />
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+                {selectedInvoices.length > 0 && (
+                  <Button 
+                    variant="destructive" 
+                    size="sm"
+                    onClick={() => {
+                        if (confirm(`Tem certeza que deseja excluir ${selectedInvoices.length} notas fiscais?`)) {
+                            batchDeleteMutation.mutate(selectedInvoices);
+                        }
+                    }}
+                    disabled={batchDeleteMutation.isPending}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Excluir Selecionadas ({selectedInvoices.length})
+                  </Button>
+                )}
+                <div className="relative w-full sm:w-64">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" data-testid="input-search-invoices" />
+                </div>
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="Filtrar por Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos</SelectItem>
+                    {Object.entries(statusLabels).map(([key, value]) => (
+                      <SelectItem key={key} value={key}>{value.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
             </div>
           </div>
         </CardHeader>
@@ -220,8 +408,27 @@ export default function InvoicesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Proprietário</TableHead>
-                    <TableHead className="hidden md:table-cell">Imóvel</TableHead>
+                    <TableHead className="w-[50px]">
+                      <Checkbox 
+                        checked={
+                          filteredInvoices && 
+                          filteredInvoices.length > 0 && 
+                          filteredInvoices.filter(i => {
+                            const e = getNfseEmissao(i.id);
+                            return (e ? e.status : i.status) !== "EMITIDA";
+                          }).length > 0 &&
+                          filteredInvoices.filter(i => {
+                            const e = getNfseEmissao(i.id);
+                            return (e ? e.status : i.status) !== "EMITIDA";
+                          }).every(i => selectedInvoices.includes(i.id))
+                        }
+                        onCheckedChange={toggleSelectAll}
+                        aria-label="Select all"
+                      />
+                    </TableHead>
+                    <TableHead>Empresa</TableHead>
+                    <TableHead>Cliente</TableHead>
+                    <TableHead className="hidden md:table-cell">Contrato</TableHead>
                     <TableHead>Referência</TableHead>
                     <TableHead>Valor</TableHead>
                     <TableHead className="hidden lg:table-cell">Número NF</TableHead>
@@ -231,110 +438,243 @@ export default function InvoicesPage() {
                 </TableHeader>
                 <TableBody>
                   {filteredInvoices.map((invoice) => {
-                    const landlord = getLandlordName(invoice.landlordId);
+                    const client = getClientName(invoice);
+                    const company = getCompanyName(invoice);
                     const receipt = getReceiptInfo(invoice.receiptId);
                     const emissao = getNfseEmissao(invoice.id);
                     
-                    // Prioriza status da emissão NFS-e se existir, senão usa status da invoice
-                    const displayStatus = emissao ? emissao.status : invoice.status;
+                    // Lógica de Status para Exibição
+                    let displayStatus = emissao ? emissao.status : invoice.status;
+                    const isBoletoIssued = invoice.boletoStatus === 'ISSUED';
+                    const isNfseIssued = displayStatus === 'EMITIDA';
+                    
+                    // Se boleto emitido, mas NF não, status é Boleto Emitido
+                    // Se ambos, queremos mostrar ambos (tratado na renderização)
+                    // Para fins de filtro e lógica de botões, precisamos manter o displayStatus consistente
+                    
                     const StatusIcon = statusLabels[displayStatus]?.icon || FileText;
+                    const isDeletable = displayStatus !== "EMITIDA";
                     
                     return (
                       <TableRow key={invoice.id} data-testid={`row-invoice-${invoice.id}`}>
-                        <TableCell className="font-medium">{landlord}</TableCell>
-                        <TableCell className="hidden md:table-cell">{receipt.property}</TableCell>
+                        <TableCell>
+                           <Checkbox 
+                              checked={selectedInvoices.includes(invoice.id)}
+                              onCheckedChange={() => toggleSelect(invoice.id)}
+                              aria-label={`Select invoice ${invoice.number}`}
+                              disabled={!isDeletable}
+                           />
+                        </TableCell>
+                        <TableCell className="font-medium max-w-[150px] truncate" title={typeof company === 'string' ? company : ''}>{company}</TableCell>
+                        <TableCell className="max-w-[150px] truncate" title={typeof client === 'string' ? client : ''}>{client}</TableCell>
+                        <TableCell className="hidden md:table-cell max-w-[150px] truncate" title={receipt.contract}>{receipt.contract}</TableCell>
                         <TableCell>{receipt.ref}</TableCell>
                         <TableCell className="font-medium">R$ {Number(invoice.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
-                        <TableCell className="hidden lg:table-cell font-mono text-sm">{emissao?.numeroNfse || invoice.number || "-"}</TableCell>
+                        <TableCell className="hidden lg:table-cell font-mono text-sm">{emissao?.numero || invoice.number || "-"}</TableCell>
                         <TableCell>
-                          <Badge variant={statusLabels[displayStatus]?.variant || "secondary"} className="gap-1">
-                            <StatusIcon className="h-3 w-3" />
-                            {statusLabels[displayStatus]?.label || displayStatus}
-                          </Badge>
-                          {displayStatus === "FALHOU" && emissao?.erroMensagem && (
-                            <span className="text-xs text-destructive block mt-1 truncate max-w-[200px]" title={emissao.erroMensagem}>{emissao.erroMensagem}</span>
-                          )}
+                          <div className="flex flex-col gap-1">
+                            {/* Badge de Boleto */}
+                            {isBoletoIssued && (
+                              <Badge variant="default" className="gap-1 w-fit bg-amber-600 hover:bg-amber-700">
+                                <Barcode className="h-3 w-3" />
+                                Boleto Emitido
+                              </Badge>
+                            )}
+
+                            {/* Badge de Email Enviado */}
+                            {invoice.emailStatus === 'SENT' && (
+                              <Badge variant="outline" className="gap-1 w-fit text-green-600 border-green-200 bg-green-50">
+                                <Mail className="h-3 w-3" />
+                                Enviado em {invoice.emailSentAt ? new Date(invoice.emailSentAt).toLocaleDateString() : 'Sim'}
+                              </Badge>
+                            )}
+
+                            {/* Badge de Status NFS-e (Mostra se não for boleto emitido OU se for NF emitida/erro/cancelada) */}
+                            {(!isBoletoIssued || isNfseIssued || ['FALHOU', 'CANCELADA', 'error', 'cancelled'].includes(displayStatus)) && (
+                              <Badge variant={statusLabels[displayStatus]?.variant || "secondary"} className="gap-1 w-fit">
+                                <StatusIcon className="h-3 w-3" />
+                                {statusLabels[displayStatus]?.label || displayStatus}
+                              </Badge>
+                            )}
+                            
+                            {displayStatus === "FALHOU" && emissao?.erroMensagem && (
+                              <span className="text-xs text-destructive block mt-1 truncate max-w-[200px]" title={emissao.erroMensagem}>{emissao.erroMensagem}</span>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
-                            {(!emissao || emissao.status === "PENDENTE" || emissao.status === "FALHOU") && (
-                              <>
+                            {/* Ação Primária: Emitir NF (se pendente/falha) */}
+                            {(!emissao || ["PENDENTE", "FALHOU", "ENVIANDO", "PROCESSANDO", "draft", "error"].includes(displayStatus)) && (
                                 <Button
                                   size="sm"
                                   onClick={() => issueInvoiceMutation.mutate(invoice)}
                                   disabled={issueInvoiceMutation.isPending || processNfseMutation.isPending}
                                   data-testid={`button-issue-invoice-${invoice.id}`}
                                 >
-                                  {(issueInvoiceMutation.isPending || processNfseMutation.isPending) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (emissao?.status === "FALHOU" ? <RefreshCw className="mr-2 h-4 w-4" /> : <FileCheck className="mr-2 h-4 w-4" />)}
-                                  {emissao?.status === "FALHOU" ? "Reprocessar" : "Emitir NF"}
+                                  {processNfseMutation.isPending ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    "Emitir NF"
+                                  )}
                                 </Button>
-                              </>
+                            )}
+
+                            {/* Ação de Boleto (Visível se emitido ou se NF emitida) */}
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                className={`h-8 w-8 p-0 ${invoice.boletoStatus === 'ISSUED' ? "text-green-600 hover:text-green-700 hover:bg-green-50" : "text-blue-600 hover:text-blue-700 hover:bg-blue-50"}`}
+                                onClick={() => {
+                                   if (invoice.boletoStatus === 'ISSUED') {
+                                     window.open(`/api/invoices/${invoice.id}/boleto/pdf`, '_blank');
+                                   } else {
+                                     if (confirm("Deseja emitir o boleto para esta Nota Fiscal pelo Banco Inter?")) {
+                                       issueBoletoMutation.mutate(invoice.id);
+                                     }
+                                   }
+                                }}
+                                title={invoice.boletoStatus === 'ISSUED' ? "Ver Boleto" : "Emitir Boleto Inter"}
+                                disabled={issueBoletoMutation.isPending}
+                            >
+                                {issueBoletoMutation.isPending ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Barcode className="h-4 w-4" />
+                                )}
+                            </Button>
+
+                            {invoice.boletoStatus === 'ISSUED' && (
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8 text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+                                  onClick={() => {
+                                    if (confirm("Deseja cancelar/liberar este boleto para nova emissão?")) {
+                                      cancelBoletoMutation.mutate(invoice.id);
+                                    }
+                                  }}
+                                  disabled={cancelBoletoMutation.isPending}
+                                  title="Cancelar/Liberar Boleto"
+                                >
+                                  {cancelBoletoMutation.isPending ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <RefreshCw className="h-4 w-4" />
+                                  )}
+                                </Button>
                             )}
                             
                             {emissao?.status === "EMITIDA" && (
                               <>
                                 <Button
-                                  size="sm"
                                   variant="outline"
-                                  className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 border-blue-200"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => sendEmailMutation.mutate(invoice.id)}
+                                  title={invoice.emailStatus === 'SENT' ? "Reenviar Email" : "Enviar Email para Cliente"}
+                                  disabled={sendEmailMutation.isPending}
+                                >
+                                  {sendEmailMutation.isPending && sendEmailMutation.variables === invoice.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Mail className="h-4 w-4" />
+                                  )}
+                                </Button>
+                                
+                                <Button
+                                  size="icon"
+                                  variant="outline"
+                                  className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50 border-blue-200"
                                   onClick={() => handleViewDetails(emissao)}
                                   title="Ver Detalhes (Chave, Retorno)"
                                 >
-                                  <Eye className="mr-2 h-4 w-4" />
-                                  Detalhes
+                                  <Eye className="h-4 w-4" />
                                 </Button>
                                 <Button
-                                  size="sm"
+                                  size="icon"
                                   variant="outline"
-                                  className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 border-blue-200"
+                                  className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50 border-blue-200"
                                   onClick={() => window.open(`/api/nfse/emissoes/${emissao.id}/xml`, '_blank')}
                                   title="Baixar XML"
                                 >
-                                  <Download className="mr-2 h-4 w-4" />
-                                  XML
+                                  <Download className="h-4 w-4" />
                                 </Button>
                                 {emissao.chaveAcesso && (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="text-purple-600 hover:text-purple-700 hover:bg-purple-50 border-purple-200"
-                                      onClick={() => window.open(`/api/nfse/danfse/${emissao.chaveAcesso}`, '_blank')}
-                                      title="Imprimir DANFSe"
-                                    >
-                                      <Printer className="mr-2 h-4 w-4" />
-                                      DANFSe
-                                    </Button>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        size="icon"
+                                        variant="outline"
+                                        className="h-8 w-8 text-purple-600 hover:text-purple-700 hover:bg-purple-50 border-purple-200"
+                                        title="Imprimir DANFSe"
+                                      >
+                                        <Printer className="h-4 w-4" />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                      <DropdownMenuItem onClick={() => window.open(`/api/nfse/emissoes/${emissao.id}/danfse/proxy`, '_blank')}>
+                                        <Eye className="mr-2 h-4 w-4" />
+                                        Visualizar
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onClick={() => {
+                                          const link = document.createElement('a');
+                                          link.href = `/api/nfse/emissoes/${emissao.id}/danfse/proxy?download=true`;
+                                          link.download = `DANFSE_${emissao.chaveAcesso}.pdf`;
+                                          document.body.appendChild(link);
+                                          link.click();
+                                          document.body.removeChild(link);
+                                      }}>
+                                        <Download className="mr-2 h-4 w-4" />
+                                        Download
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
                                 )}
                                 {emissao.pdfUrl && (
                                     <Button
-                                      size="sm"
+                                      size="icon"
                                       variant="outline"
-                                      className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                                      className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
                                       onClick={() => window.open(emissao.pdfUrl || '', '_blank')}
                                       title="Baixar PDF"
                                     >
-                                      <FileText className="mr-2 h-4 w-4" />
-                                      PDF
+                                      <FileText className="h-4 w-4" />
                                     </Button>
                                 )}
                                 <Button
-                                  size="sm"
+                                  size="icon"
                                   variant="ghost"
-                                  className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                                  className="h-8 w-8"
+                                  onClick={() => {
+                                       setManualFixEmissao(emissao);
+                                       setManualStatus(emissao.status);
+                                       setManualNumero(emissao.numero || "");
+                                       setManualChave(emissao.chaveAcesso || "");
+                                       setManualErro(emissao.erroMensagem || "");
+                                       setIsManualFixOpen(true);
+                                     }}
+                                  title="Correção Manual"
+                                >
+                                  <Wrench className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
                                   onClick={() => handleCancelClick(emissao.id)}
                                   title="Cancelar NFS-e"
                                 >
-                                  <Ban className="mr-2 h-4 w-4" />
-                                  Cancelar
+                                  <Ban className="h-4 w-4" />
                                 </Button>
                               </>
                             )}
 
-                            {(!emissao && ["draft", "error"].includes(invoice.status)) && (
+                            {(["draft", "error", "PENDENTE", "FALHOU", "ENVIANDO", "PROCESSANDO", "CANCELADA", "cancelled"].includes(displayStatus)) && (
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
                                 onClick={() => {
                                   if (confirm("Tem certeza que deseja excluir esta nota fiscal?")) {
                                     deleteInvoiceMutation.mutate(invoice.id);
@@ -355,14 +695,15 @@ export default function InvoicesPage() {
               </Table>
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <FileCheck className="h-12 w-12 text-muted-foreground/50" />
-              <h3 className="mt-4 text-lg font-semibold">Nenhuma nota fiscal encontrada</h3>
-              <p className="text-sm text-muted-foreground">As notas fiscais são geradas a partir dos recibos pagos.</p>
-            </div>
+            <EmptyState
+              icon={FileCheck}
+              title="Nenhuma nota fiscal encontrada"
+              description="As notas fiscais são geradas a partir dos recibos pagos."
+            />
           )}
         </CardContent>
       </Card>
+
 
       <Dialog open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
@@ -382,7 +723,7 @@ export default function InvoicesPage() {
                     </div>
                     <div>
                         <label className="text-sm font-medium text-muted-foreground">Número NFS-e</label>
-                        <p className="font-semibold">{selectedEmissao.numeroNfse || "-"}</p>
+                        <p className="font-semibold">{selectedEmissao.numero || "-"}</p>
                     </div>
                     <div className="col-span-2">
                         <label className="text-sm font-medium text-muted-foreground">Chave de Acesso</label>
@@ -422,6 +763,118 @@ export default function InvoicesPage() {
                         </div>
                     </div>
                 )}
+
+                {selectedEmissao.cancelamentoXmlResponse && (
+                    <div className="border-t pt-4 mt-4">
+                        <h4 className="font-semibold mb-2 text-destructive">Dados do Cancelamento</h4>
+                        <div>
+                            <label className="text-sm font-medium text-muted-foreground">Retorno do Cancelamento (Raw)</label>
+                            <div className="bg-muted p-4 rounded-md overflow-x-auto mt-1">
+                                <pre className="text-xs whitespace-pre-wrap">
+                                    {selectedEmissao.cancelamentoXmlResponse.startsWith('{') ? 
+                                        JSON.stringify(JSON.parse(selectedEmissao.cancelamentoXmlResponse), null, 2) : 
+                                        selectedEmissao.cancelamentoXmlResponse
+                                    }
+                                </pre>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {selectedEmissao.cancelamentoXmlRequest && (
+                    <div>
+                        <label className="text-sm font-medium text-muted-foreground">Requisição de Cancelamento (Raw)</label>
+                         <div className="bg-muted p-4 rounded-md overflow-x-auto mt-1">
+                            <pre className="text-xs whitespace-pre-wrap">
+                                {selectedEmissao.cancelamentoXmlRequest}
+                            </pre>
+                        </div>
+                    </div>
+                )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={isManualFixOpen} onOpenChange={setIsManualFixOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Correção Manual de Status</DialogTitle>
+            <DialogDescription>
+              Ajuste manualmente o status e dados da NFS-e caso tenha ocorrido divergência.
+            </DialogDescription>
+          </DialogHeader>
+          {manualFixEmissao && (
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <label>Status</label>
+                <select
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  value={manualStatus}
+                  onChange={(e) => setManualStatus(e.target.value)}
+                >
+                  <option value="PENDENTE">PENDENTE</option>
+                  <option value="PROCESSANDO">PROCESSANDO</option>
+                  <option value="EMITIDA">EMITIDA</option>
+                  <option value="CANCELADA">CANCELADA</option>
+                  <option value="FALHOU">FALHOU</option>
+                </select>
+              </div>
+              <div className="grid gap-2">
+                <label>Número NFS-e</label>
+                <Input 
+                  value={manualNumero}
+                  onChange={(e) => setManualNumero(e.target.value)}
+                  placeholder="Ex: 1234" 
+                />
+              </div>
+              <div className="grid gap-2">
+                <label>Chave de Acesso</label>
+                <Input 
+                  value={manualChave}
+                  onChange={(e) => setManualChave(e.target.value)}
+                  placeholder="Chave de Acesso da NFS-e" 
+                />
+              </div>
+               <div className="grid gap-2">
+                <label>Mensagem de Erro (Opcional)</label>
+                <Input 
+                  value={manualErro}
+                  onChange={(e) => setManualErro(e.target.value)}
+                  placeholder="Limpar mensagem de erro" 
+                />
+              </div>
+              <Button 
+                onClick={() => {
+                  console.log("Iniciando correção manual...", {
+                    id: manualFixEmissao.id,
+                    data: { 
+                      status: manualStatus, 
+                      numeroNfse: manualNumero, 
+                      chaveAcesso: manualChave, 
+                      erroMensagem: manualErro 
+                    }
+                  });
+                  manualUpdateNfseMutation.mutate({
+                    id: manualFixEmissao.id,
+                    data: { 
+                      status: manualStatus, 
+                      numeroNfse: manualNumero, 
+                      chaveAcesso: manualChave, 
+                      erroMensagem: manualErro 
+                    }
+                  });
+                }}
+                disabled={manualUpdateNfseMutation.isPending}
+              >
+                {manualUpdateNfseMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Salvando...
+                  </>
+                ) : (
+                  "Salvar Correção"
+                )}
+              </Button>
             </div>
           )}
         </DialogContent>

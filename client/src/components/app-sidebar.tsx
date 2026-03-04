@@ -1,4 +1,4 @@
-import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp } from "lucide-react";
+import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp, Briefcase, Handshake, ChevronRight } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import {
   Sidebar,
@@ -9,33 +9,42 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useAuth } from "@/hooks/use-auth";
 
 const menuItems = [
   { title: "Dashboard", url: "/", icon: Home },
-  { title: "Imóveis", url: "/properties", icon: Building2 },
-  { title: "Proprietários", url: "/landlords", icon: Users },
-  { title: "Locatários", url: "/tenants", icon: UserCheck },
-  { title: "Fiadores", url: "/guarantors", icon: ShieldCheck },
-  { title: "Prestadores", url: "/providers", icon: Wrench },
+  { title: "Empresa", url: "/companies", icon: Building2 },
+  { title: "Clientes", url: "/clients", icon: Users },
+  { title: "Analistas", url: "/analysts", icon: UserCheck },
+  { title: "Parcerias", url: "/partners", icon: Handshake },
+  { title: "Catálogo de Serviços", url: "/service-catalog", icon: Wrench },
+  { 
+    title: "Projetos", 
+    icon: Briefcase,
+    items: [
+      { title: "Clientes", url: "/projects" },
+      { title: "Parcerias", url: "/projects/partners" },
+      { title: "Sistemas", url: "/projects/systems" },
+    ]
+  },
   { title: "Contratos", url: "/contracts", icon: FileText },
-  { title: "Serviços", url: "/services", icon: Wrench },
 ];
 
 const financialItems = [
   { title: "Recibos", url: "/receipts", icon: Receipt },
   { title: "Caixa", url: "/cash", icon: DollarSign },
-  { title: "Repasses", url: "/transfers", icon: Send },
   { title: "Notas Fiscais", url: "/invoices", icon: FileCheck },
-  { title: "Ajustes", url: "/adjustments", icon: ArrowUpDown },
   { title: "Config. NFS-e", url: "/nfse/config", icon: Settings },
 ];
 
 const reportItems = [
-  { title: "Repasse", url: "/reports/landlord-transfers", icon: BarChart },
   { title: "Receita", url: "/reports/revenue", icon: TrendingUp },
 ];
 
@@ -55,8 +64,8 @@ export function AppSidebar() {
             <Building2 className="h-5 w-5" />
           </div>
           <div className="flex flex-col">
-            <span className="text-sm font-semibold text-sidebar-foreground">Imobiliária</span>
-            <span className="text-xs text-sidebar-foreground/70">Simples</span>
+            <span className="text-sm font-semibold text-sidebar-foreground">Controle de</span>
+            <span className="text-xs text-sidebar-foreground/70">Serviços</span>
           </div>
         </div>
       </SidebarHeader>
@@ -67,12 +76,37 @@ export function AppSidebar() {
             <SidebarMenu>
               {menuItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild isActive={location === item.url}>
-                    <Link href={item.url} data-testid={`link-${item.url.replace("/", "") || "dashboard"}`}>
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
+                  {item.items ? (
+                    <Collapsible defaultOpen className="group/collapsible">
+                        <SidebarMenuButton asChild isActive={item.items.some(sub => location === sub.url)}>
+                          <CollapsibleTrigger>
+                            <item.icon className="h-4 w-4" />
+                            <span>{item.title}</span>
+                            <ChevronRight className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-90" />
+                          </CollapsibleTrigger>
+                        </SidebarMenuButton>
+                        <CollapsibleContent>
+                          <SidebarMenuSub>
+                            {item.items.map((subItem) => (
+                              <SidebarMenuSubItem key={subItem.title}>
+                                <SidebarMenuSubButton asChild isActive={location === subItem.url}>
+                                  <Link href={subItem.url}>
+                                    <span>{subItem.title}</span>
+                                  </Link>
+                                </SidebarMenuSubButton>
+                              </SidebarMenuSubItem>
+                            ))}
+                          </SidebarMenuSub>
+                        </CollapsibleContent>
+                    </Collapsible>
+                  ) : (
+                    <SidebarMenuButton asChild isActive={location === item.url}>
+                      <Link href={item.url!} data-testid={`link-${item.url!.replace("/", "") || "dashboard"}`}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  )}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
@@ -112,34 +146,35 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-sidebar-foreground/50">Sistema</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {systemItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild isActive={location === item.url}>
-                    <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {user?.role === "admin" && (
+          <SidebarGroup>
+            <SidebarGroupLabel className="text-sidebar-foreground/50">Sistema</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {systemItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild isActive={location === item.url}>
+                      <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
-      <SidebarFooter className="p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex flex-col">
-            <span className="text-sm font-medium text-sidebar-foreground">{user?.name || "Admin"}</span>
-            <span className="text-xs text-sidebar-foreground/60">{user?.email}</span>
-          </div>
-          <SidebarMenuButton onClick={logout} className="w-auto p-2" data-testid="button-logout">
-            <LogOut className="h-4 w-4" />
-          </SidebarMenuButton>
-        </div>
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={() => logout()} className="text-red-500 hover:text-red-600 hover:bg-red-50">
+              <LogOut className="h-4 w-4" />
+              <span>Sair</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
   );

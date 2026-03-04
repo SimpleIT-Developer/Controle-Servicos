@@ -35,6 +35,9 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+// Force restart trigger
+console.log("Server instance initialized/restarted");
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;

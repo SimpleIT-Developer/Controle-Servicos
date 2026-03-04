@@ -1,13 +1,53 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
+import https from "https";
 import session from "express-session";
 import bcrypt from "bcrypt";
+import axios from "axios";
 import { storage } from "./storage";
 import { pixProvider } from "./providers/MockPixProvider";
 import { nfProvider } from "./providers/MockNfProvider";
 import { nfseProvider } from "./providers/NfseNationalProvider";
+import { emailService } from "./services/emailService";
+import { InterProvider } from "./providers/InterProvider";
+import { 
+  companies, 
+  receipts, 
+  projects, 
+  contracts, 
+  systemContracts, 
+  clients, 
+  partners, 
+  nfseEmissoes 
+} from "@shared/schema";
+import { eq } from "drizzle-orm";
 import { loginSchema } from "@shared/schema";
 import { z } from "zod";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+
+// Configure Multer for Certificate Uploads (Memory Storage for DB saving)
+const storageMulter = multer.memoryStorage();
+
+const upload = multer({ storage: storageMulter });
+
+// Configure Multer for Certificate Uploads (Disk Storage)
+const certStorage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const dir = path.join(process.cwd(), "server", "certs");
+    if (!fs.existsSync(dir)){
+        fs.mkdirSync(dir, { recursive: true });
+    }
+    cb(null, dir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const uploadCert = multer({ storage: certStorage });
 
 declare module "express-session" {
   interface SessionData {
@@ -42,7 +82,7 @@ export async function registerRoutes(
 ): Promise<Server> {
   app.use(
     session({
-      secret: process.env.SESSION_SECRET || "imobiliaria-simples-secret-key",
+      secret: process.env.SESSION_SECRET || "controle-servicos-secret-key",
       resave: false,
       saveUninitialized: false,
       cookie: {
@@ -54,6 +94,72 @@ export async function registerRoutes(
   );
 
   await seedAdminUser();
+
+  // CEP Lookup
+  app.get("/api/cep/:cep", async (req, res) => {
+    const cep = req.params.cep.replace(/\D/g, "");
+    if (cep.length !== 8) {
+      return res.status(400).json({ error: "CEP inválido" });
+    }
+
+    try {
+      // 1. OpenCEP (Primary)
+      try {
+        const response = await axios.get(`https://opencep.com/v1/${cep}`, { timeout: 3000 });
+        if (response.data && !response.data.error) {
+           return res.json({
+             street: response.data.logradouro,
+             neighborhood: response.data.bairro,
+             city: response.data.localidade,
+             state: response.data.uf,
+             ibge: response.data.ibge,
+             zipCode: response.data.cep
+           });
+        }
+      } catch (e) {
+        // console.log("OpenCEP failed, trying ViaCEP...");
+      }
+
+      // 2. ViaCEP (Fallback)
+      try {
+        const response = await axios.get(`https://viacep.com.br/ws/${cep}/json/`, { timeout: 3000 });
+        if (response.data && !response.data.erro) {
+           return res.json({
+             street: response.data.logradouro,
+             neighborhood: response.data.bairro,
+             city: response.data.localidade,
+             state: response.data.uf,
+             ibge: response.data.ibge,
+             zipCode: response.data.cep
+           });
+        }
+      } catch (e) {
+         // console.log("ViaCEP failed, trying BrasilAPI...");
+      }
+
+      // 3. BrasilAPI (Last Resort)
+      try {
+        const response = await axios.get(`https://brasilapi.com.br/api/cep/v2/${cep}`, { timeout: 3000 });
+        if (response.data) {
+           return res.json({
+             street: response.data.street,
+             neighborhood: response.data.neighborhood,
+             city: response.data.city,
+             state: response.data.state,
+             ibge: null, 
+             zipCode: response.data.cep
+           });
+        }
+      } catch (e) {
+        // console.log("BrasilAPI failed.");
+      }
+
+      return res.status(404).json({ error: "CEP não encontrado" });
+    } catch (error) {
+      console.error("Erro ao buscar CEP:", error);
+      res.status(500).json({ error: "Erro interno ao buscar CEP" });
+    }
+  });
 
   app.post("/api/auth/login", async (req, res) => {
     try {
@@ -94,15 +200,320 @@ export async function registerRoutes(
     res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } });
   });
 
+  // --- Boleto Inter Endpoints ---
+
+  app.post("/api/receipts/:id/boleto", requireAuth, async (req, res) => {
+    try {
+      const receiptId = req.params.id;
+      
+      // 1. Fetch Receipt
+      const receipt = await storage.getReceipt(receiptId);
+      if (!receipt) {
+        return res.status(404).json({ error: "Recibo não encontrado" });
+      }
+
+      // 2. Determine Company and Payer
+      let companyId: string | undefined;
+      let payer: any = null; // Client or Partner
+      let payerType: "FISICA" | "JURIDICA" = "JURIDICA";
+      let systemName: string | undefined;
+
+      // Helper to format strings
+      const cleanDigits = (s: string) => s.replace(/\D/g, "");
+
+      if (receipt.projectId) {
+        const project = await storage.getProject(receipt.projectId);
+        if (!project) return res.status(404).json({ error: "Projeto não encontrado" });
+        companyId = project.companyId;
+        
+        if (project.clientType === 'partner' && project.partnerId) {
+          payer = await storage.getPartner(project.partnerId);
+        } else if (project.clientId) {
+          payer = await storage.getClient(project.clientId);
+        }
+      } else if (receipt.contractId) {
+        const contract = await storage.getContract(receipt.contractId);
+        if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
+        companyId = contract.companyId;
+        payer = await storage.getClient(contract.clientId);
+      } else if (receipt.systemContractId) {
+        const sysContract = await storage.getSystemContract(receipt.systemContractId);
+        if (!sysContract) return res.status(404).json({ error: "Contrato de Sistema não encontrado" });
+        companyId = sysContract.companyId || undefined; // Handle nullable
+        systemName = sysContract.systemName;
+        if (sysContract.clientId) {
+          payer = await storage.getClient(sysContract.clientId);
+        }
+      }
+
+      if (!companyId) {
+        return res.status(400).json({ error: "Empresa não vinculada a este recibo" });
+      }
+
+      if (!payer) {
+        return res.status(400).json({ error: "Pagador (Cliente/Parceiro) não encontrado" });
+      }
+
+      // 3. Get Company Config for Inter
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Empresa não encontrada" });
+
+      if (!company.interClientId || !company.interClientSecret || !company.interCertPath) {
+        return res.status(400).json({ error: "Configuração do Boleto Inter incompleta para esta empresa" });
+      }
+
+      // 4. Prepare Boleto Data
+      const payerDoc = cleanDigits(payer.doc || payer.cnpj || "");
+      payerType = payerDoc.length > 11 ? "JURIDICA" : "FISICA";
+      
+      const boletoData: any = {
+        seuNumero: receipt.id.substring(0, 15), // Max 15 chars
+        valorNominal: Number(receipt.totalDue),
+        // dataVencimento set below
+        numDiasAgenda: 30,
+        pagador: {
+          cpfCnpj: payerDoc,
+          tipoPessoa: payerType,
+          nome: payer.name.substring(0, 100),
+          endereco: payer.street?.substring(0, 90) || payer.address?.substring(0, 90) || "Endereço não informado",
+          numero: payer.number || "S/N",
+          complemento: payer.complement || "",
+          bairro: payer.neighborhood || "Centro",
+          cidade: payer.city || "Cidade",
+          uf: payer.state || "MG",
+          cep: cleanDigits(payer.zipCode || "00000000"),
+          email: payer.email || "",
+          ddd: payer.phone ? cleanDigits(payer.phone).substring(0, 2) : "",
+          telefone: payer.phone ? cleanDigits(payer.phone).substring(2) : ""
+        },
+        multa: {
+            taxa: 2,
+            codigo: "PERCENTUAL"
+        },
+        mora: {
+            taxa: 1,
+            codigo: "TAXAMENSAL"
+        },
+        mensagem: {
+          linha1: (systemName === 'SimpleDFe' || systemName === 'SimpleDFE') 
+              ? "Mensalidade Sistema de Captura de NFe/ NFSe / CTe - SimpleDFe" 
+              : `Referente a serviços de ${receipt.refMonth}/${receipt.refYear}`,
+          linha2: "",
+          linha3: "",
+          linha4: "",
+          linha5: ""
+        },
+        beneficiarioFinal: {
+          cpfCnpj: cleanDigits(company.doc),
+          tipoPessoa: cleanDigits(company.doc).length > 11 ? "JURIDICA" : "FISICA",
+          nome: company.name,
+          endereco: company.address || "Endereço da Empresa",
+          numero: "S/N",
+          complemento: "",
+          bairro: "Centro",
+          cidade: company.city || "Cidade",
+          uf: company.state || "UF",
+          cep: cleanDigits(company.zipCode || "00000000")
+        },
+        formasRecebimento: ["BOLETO", "PIX"]
+      };
+
+      // Refine Due Date
+      let dayDue = 10; // Default
+      if (receipt.projectId) {
+        const p = await storage.getProject(receipt.projectId);
+        // Check if projects table has dayDue (schema snippet showed line 101 as dayDue)
+        // If typescript complains, we cast or check schema. Shared schema line 101 says dayDue: integer("day_due")
+        if ((p as any).dayDue) dayDue = (p as any).dayDue;
+      } else if (receipt.contractId) {
+        const c = await storage.getContract(receipt.contractId);
+        if (c?.dayDue) dayDue = c.dayDue;
+      } else if (receipt.systemContractId) {
+        const sc = await storage.getSystemContract(receipt.systemContractId);
+        if (sc?.dayDue) dayDue = sc.dayDue;
+      }
+
+      // Calculate Due Date:
+      // "o Vencimento me desculpe, mas é no mesmo mês de referencia"
+      const year = receipt.refYear;
+      const monthIndex = receipt.refMonth - 1; // Convert to 0-based
+      const dueDate = new Date(year, monthIndex, dayDue);
+      boletoData.dataVencimento = dueDate.toISOString().split('T')[0];
+
+      // Add Nota Fiscal Info if available
+      const invoices = await storage.getInvoicesByReceiptId(receipt.id);
+      const issuedInvoice = invoices.find(inv => inv.status === 'EMITIDA');
+      
+      if (issuedInvoice) {
+        const nfseEmissao = await storage.getNfseEmissaoByInvoiceId(issuedInvoice.id);
+        if (nfseEmissao && nfseEmissao.chaveAcesso && nfseEmissao.numero) {
+           // Inter API requires exactly 44 digits for chaveNFe. 
+           // NFS-e Nacional keys are 50 digits. If we have a mismatch, we skip sending the NF link to avoid error.
+           const cleanKey = nfseEmissao.chaveAcesso.replace(/\D/g, '');
+           
+           if (cleanKey.length === 44) {
+               const nfseConfig = await storage.getNfseConfig(companyId);
+               
+               boletoData.notaFiscal = {
+                 chaveNFe: cleanKey,
+                 numero: parseInt(nfseEmissao.numero.replace(/\D/g, '')) || 0,
+                 serie: nfseConfig?.serieNfse ? parseInt(nfseConfig.serieNfse.replace(/\D/g, '')) : 900,
+                 dataEmissao: nfseEmissao.createdAt.toISOString().split('T')[0],
+                 parcela: 1,
+                 naturezaOperacao: "Venda" 
+               };
+           } else {
+               console.warn(`[Boleto Inter] Skipping Nota Fiscal link: Chave has ${cleanKey.length} digits (expected 44). Key: ${cleanKey}`);
+           }
+        }
+      }
+      
+      // 5. Call Inter Provider
+      const inter = new InterProvider({
+        environment: company.interEnvironment || "sandbox",
+        clientId: company.interClientId,
+        clientSecret: company.interClientSecret,
+        certPath: company.interCertPath,
+        keyPath: company.interKeyPath || undefined
+      });
+
+      try {
+        const result = await inter.issueBoleto(boletoData);
+
+        // 6. Update Receipt
+        await storage.updateReceipt(receipt.id, {
+          boletoSolicitacaoId: result.codigoSolicitacao,
+          boletoStatus: "ISSUED",
+          status: "BOLETO_EMITIDO"
+        });
+
+        res.json({ success: true, codigoSolicitacao: result.codigoSolicitacao });
+      } catch (boletoError: any) {
+        console.error("Erro detalhado Boleto Inter:", boletoError);
+        
+        // Log to System Logs as requested
+        await storage.createSystemLog({
+           level: "ERROR",
+           category: "BOLETO_INTER",
+           message: `Erro ao emitir boleto para Recibo ${receipt.id}`,
+           details: JSON.stringify({
+               payload_enviado: boletoData,
+               erro_retorno: boletoError.message || "Erro desconhecido",
+               stack: boletoError.stack
+           }),
+           correlationId: receipt.id
+        });
+        
+        throw boletoError;
+      }
+
+    } catch (error: any) {
+      console.error("Erro ao emitir boleto:", error);
+      res.status(500).json({ error: error.message || "Erro ao emitir boleto" });
+    }
+  });
+
+  app.get("/api/receipts/:id/boleto/pdf", requireAuth, async (req, res) => {
+    try {
+      const receiptId = req.params.id;
+      const receipt = await storage.getReceipt(receiptId);
+      
+      if (!receipt || !receipt.boletoSolicitacaoId) {
+        return res.status(404).json({ error: "Boleto não encontrado para este recibo" });
+      }
+
+      // Need company to configure provider
+      let companyId: string | undefined;
+      if (receipt.projectId) {
+        const p = await storage.getProject(receipt.projectId);
+        companyId = p?.companyId;
+      } else if (receipt.contractId) {
+        const c = await storage.getContract(receipt.contractId);
+        companyId = c?.companyId;
+      } else if (receipt.systemContractId) {
+        const sc = await storage.getSystemContract(receipt.systemContractId);
+        companyId = sc?.companyId;
+      }
+
+      if (!companyId) return res.status(404).json({ error: "Empresa não encontrada" });
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Empresa não encontrada" });
+
+      const inter = new InterProvider({
+        environment: company.interEnvironment || "sandbox",
+        clientId: company.interClientId!, 
+        clientSecret: company.interClientSecret!,
+        certPath: company.interCertPath!,
+        keyPath: company.interKeyPath || undefined
+      });
+
+      const pdfBase64 = await inter.getPdf(receipt.boletoSolicitacaoId);
+      const pdfBuffer = Buffer.from(pdfBase64, 'base64');
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename=boleto-${receipt.boletoSolicitacaoId}.pdf`);
+      res.send(pdfBuffer);
+
+    } catch (error: any) {
+      console.error("Erro ao obter PDF do boleto:", error);
+      res.status(500).json({ error: "Erro ao obter PDF" });
+    }
+  });
+
+  // Cancelar Boleto (Liberar para nova emissão)
+  app.post("/api/receipts/:id/boleto/cancel", requireAuth, async (req, res) => {
+    try {
+      const receiptId = req.params.id;
+      const receipt = await storage.getReceipt(receiptId);
+
+      if (!receipt) {
+        return res.status(404).json({ error: "Recibo não encontrado" });
+      }
+
+      // Se boletoStatus não for ISSUED, nem precisa cancelar
+      if (receipt.boletoStatus !== 'ISSUED') {
+         return res.status(400).json({ error: "Este recibo não possui boleto emitido para cancelar." });
+      }
+
+      // Tenta cancelar no Banco Inter (Opcional, mas recomendado se possível)
+      // Por enquanto, como o usuário pediu "apenas liberar", vamos focar em limpar o status no banco.
+      // Se quiséssemos cancelar no Inter, precisaríamos chamar inter.cancelBoleto(...) se a API suportasse e tivéssemos o motivo.
+      
+      // Determinar novo status do Recibo
+      // Se estava como BOLETO_EMITIDO, volta para o anterior.
+      // Se já tem NF emitida, fica NF_EMITIDA. Se tem NF gerada, NF_GERADA. Senão closed ou draft.
+      
+      let newStatus = receipt.status;
+      if (receipt.status === 'BOLETO_EMITIDO') {
+         if (receipt.isInvoiceIssued) newStatus = 'NF_EMITIDA';
+         else if (receipt.isInvoiceGenerated) newStatus = 'NF_GERADA';
+         else newStatus = 'closed'; // Assumindo que estava fechado antes de emitir boleto
+      }
+
+      await storage.updateReceipt(receiptId, {
+        boletoStatus: 'CANCELLED', // Marca como cancelado no histórico (ou poderia ser NULL para limpar totalmente)
+        // boletoSolicitacaoId: null, // Se limparmos, perde o histórico. Melhor manter id mas com status CANCELLED?
+        // Mas se mantivermos boletoSolicitacaoId, o getPdf pode tentar baixar boleto cancelado.
+        // O ideal para "liberar para novo" é permitir que a UI emita outro.
+        // A UI verifica boletoStatus === 'ISSUED'. Se for CANCELLED, libera botão.
+        status: newStatus
+      });
+
+      res.json({ success: true, message: "Boleto cancelado/liberado com sucesso" });
+
+    } catch (error: any) {
+      console.error("Erro ao cancelar boleto:", error);
+      res.status(500).json({ error: "Erro ao cancelar boleto" });
+    }
+  });
+
   app.get("/api/dashboard/stats", requireAuth, async (req, res) => {
     try {
-      const [contracts, properties, landlords, tenants, receipts, transfers] = await Promise.all([
+      const [contracts, companies, clients, receipts] = await Promise.all([
         storage.getContracts(),
-        storage.getProperties(),
-        storage.getLandlords(),
-        storage.getTenants(),
+        storage.getCompanies(),
+        storage.getClients(),
         storage.getReceipts(),
-        storage.getLandlordTransfers(),
       ]);
 
       const activeContracts = contracts.filter((c) => c.status === "active");
@@ -110,19 +521,14 @@ export async function registerRoutes(
       const currentYear = new Date().getFullYear();
       const openReceipts = receipts.filter((r) => r.refYear === currentYear && r.refMonth === currentMonth && r.status === "draft");
       const paidReceipts = receipts.filter((r) => r.refYear === currentYear && r.refMonth === currentMonth && (r.status === "paid" || r.status === "transferred"));
-      const pendingPayments = receipts.filter((r) => r.status === "closed");
-      const pendingTransfers = transfers.filter((t) => t.status === "pending");
-      const monthlyRevenue = pendingPayments.reduce((sum, r) => sum + Number(r.tenantTotalDue), 0);
+      const monthlyRevenue = paidReceipts.reduce((sum, r) => sum + Number(r.totalAmount), 0);
 
       res.json({
         activeContracts: activeContracts.length,
-        totalProperties: properties.length,
-        totalLandlords: landlords.length,
-        totalTenants: tenants.length,
+        totalCompanies: companies.length,
+        totalClients: clients.length,
         openReceipts: openReceipts.length,
         paidReceipts: paidReceipts.length,
-        pendingPayments: pendingPayments.length,
-        pendingTransfers: pendingTransfers.length,
         monthlyRevenue: monthlyRevenue.toLocaleString("pt-BR", { minimumFractionDigits: 2 }),
       });
     } catch (error) {
@@ -131,218 +537,435 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/landlords", requireAuth, async (req, res) => {
+  // Companies (Empresas)
+  app.get("/api/companies", requireAuth, async (req, res) => {
     try {
-      const landlords = await storage.getLandlords();
-      res.json(landlords);
+      const companies = await storage.getCompanies();
+      res.json(companies);
     } catch (error) {
-      console.error("Get landlords error:", error);
-      res.status(500).json({ error: "Erro ao buscar proprietários" });
+      console.error("Get companies error:", error);
+      res.status(500).json({ error: "Erro ao buscar empresas" });
     }
   });
 
-  app.post("/api/landlords", requireAuth, async (req, res) => {
+  app.post("/api/companies", requireAuth, async (req, res) => {
     try {
-      const landlord = await storage.createLandlord(req.body);
-      res.status(201).json(landlord);
+      const company = await storage.createCompany(req.body);
+      res.status(201).json(company);
     } catch (error) {
-      console.error("Create landlord error:", error);
-      res.status(500).json({ error: "Erro ao criar proprietário" });
+      console.error("Create company error:", error);
+      res.status(500).json({ error: "Erro ao criar empresa" });
     }
   });
 
-  app.patch("/api/landlords/:id", requireAuth, async (req, res) => {
+  app.patch("/api/companies/:id", requireAuth, async (req, res) => {
     try {
-      const landlord = await storage.updateLandlord(req.params.id, req.body);
-      if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
-      res.json(landlord);
+      const company = await storage.updateCompany(req.params.id, req.body);
+      if (!company) return res.status(404).json({ error: "Empresa não encontrada" });
+      res.json(company);
     } catch (error) {
-      console.error("Update landlord error:", error);
-      res.status(500).json({ error: "Erro ao atualizar proprietário" });
+      console.error("Update company error:", error);
+      res.status(500).json({ error: "Erro ao atualizar empresa" });
     }
   });
 
-  app.delete("/api/landlords/:id", requireAuth, async (req, res) => {
+  app.delete("/api/companies/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteLandlord(req.params.id);
+      await storage.deleteCompany(req.params.id);
       res.json({ success: true });
     } catch (error) {
-      console.error("Delete landlord error:", error);
-      res.status(500).json({ error: "Erro ao excluir proprietário" });
+      console.error("Delete company error:", error);
+      res.status(500).json({ error: "Erro ao excluir empresa" });
     }
   });
 
-  app.get("/api/tenants", requireAuth, async (req, res) => {
+  app.post("/api/companies/:id/certs", requireAuth, uploadCert.fields([{ name: 'cert', maxCount: 1 }, { name: 'key', maxCount: 1 }]), async (req, res) => {
     try {
-      const tenants = await storage.getTenants();
-      res.json(tenants);
-    } catch (error) {
-      console.error("Get tenants error:", error);
-      res.status(500).json({ error: "Erro ao buscar locatários" });
-    }
-  });
+      const companyId = req.params.id;
+      // @ts-ignore
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+      const updateData: any = {};
 
-  app.post("/api/tenants", requireAuth, async (req, res) => {
-    try {
-      const tenant = await storage.createTenant(req.body);
-      res.status(201).json(tenant);
-    } catch (error) {
-      console.error("Create tenant error:", error);
-      res.status(500).json({ error: "Erro ao criar locatário" });
-    }
-  });
-
-  app.patch("/api/tenants/:id", requireAuth, async (req, res) => {
-    try {
-      const tenant = await storage.updateTenant(req.params.id, req.body);
-      if (!tenant) return res.status(404).json({ error: "Locatário não encontrado" });
-      res.json(tenant);
-    } catch (error) {
-      console.error("Update tenant error:", error);
-      res.status(500).json({ error: "Erro ao atualizar locatário" });
-    }
-  });
-
-  app.delete("/api/tenants/:id", requireAuth, async (req, res) => {
-    try {
-      await storage.deleteTenant(req.params.id);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Delete tenant error:", error);
-      res.status(500).json({ error: "Erro ao excluir locatário" });
-    }
-  });
-
-  app.get("/api/guarantors", requireAuth, async (req, res) => {
-    try {
-      const guarantors = await storage.getGuarantors();
-      res.json(guarantors);
-    } catch (error) {
-      console.error("Get guarantors error:", error);
-      res.status(500).json({ error: "Erro ao buscar fiadores" });
-    }
-  });
-
-  app.post("/api/guarantors", requireAuth, async (req, res) => {
-    try {
-      const guarantor = await storage.createGuarantor(req.body);
-      res.status(201).json(guarantor);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Erro desconhecido";
-      console.error("Create guarantor error:", error);
-      res.status(500).json({ error: `Erro ao criar fiador: ${message}` });
-    }
-  });
-
-  app.patch("/api/guarantors/:id", requireAuth, async (req, res) => {
-    try {
-      const guarantor = await storage.updateGuarantor(req.params.id, req.body);
-      if (!guarantor) return res.status(404).json({ error: "Fiador não encontrado" });
-      res.json(guarantor);
-    } catch (error) {
-      console.error("Update guarantor error:", error);
-      res.status(500).json({ error: "Erro ao atualizar fiador" });
-    }
-  });
-
-  app.delete("/api/guarantors/:id", requireAuth, async (req, res) => {
-    try {
-      await storage.deleteGuarantor(req.params.id);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Delete guarantor error:", error);
-      res.status(500).json({ error: "Erro ao excluir fiador" });
-    }
-  });
-
-  app.get("/api/providers", requireAuth, async (req, res) => {
-    try {
-      const providers = await storage.getServiceProviders();
-      res.json(providers);
-    } catch (error) {
-      console.error("Get providers error:", error);
-      res.status(500).json({ error: "Erro ao buscar prestadores" });
-    }
-  });
-
-  app.post("/api/providers", requireAuth, async (req, res) => {
-    try {
-      const provider = await storage.createServiceProvider(req.body);
-      res.status(201).json(provider);
-    } catch (error) {
-      console.error("Create provider error:", error);
-      res.status(500).json({ error: "Erro ao criar prestador" });
-    }
-  });
-
-  app.patch("/api/providers/:id", requireAuth, async (req, res) => {
-    try {
-      const provider = await storage.updateServiceProvider(req.params.id, req.body);
-      if (!provider) return res.status(404).json({ error: "Prestador não encontrado" });
-      res.json(provider);
-    } catch (error) {
-      console.error("Update provider error:", error);
-      res.status(500).json({ error: "Erro ao atualizar prestador" });
-    }
-  });
-
-  app.delete("/api/providers/:id", requireAuth, async (req, res) => {
-    try {
-      await storage.deleteServiceProvider(req.params.id);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Delete provider error:", error);
-      res.status(500).json({ error: "Erro ao excluir prestador" });
-    }
-  });
-
-  app.get("/api/properties", requireAuth, async (req, res) => {
-    try {
-      const properties = await storage.getProperties();
-      res.json(properties);
-    } catch (error) {
-      console.error("Get properties error:", error);
-      res.status(500).json({ error: "Erro ao buscar imóveis" });
-    }
-  });
-
-  app.post("/api/properties", requireAuth, async (req, res) => {
-    try {
-      const property = await storage.createProperty(req.body);
-      res.status(201).json(property);
-    } catch (error) {
-      console.error("Create property error:", error);
-      res.status(500).json({ error: "Erro ao criar imóvel" });
-    }
-  });
-
-  app.patch("/api/properties/:id", requireAuth, async (req, res) => {
-    try {
-      const property = await storage.updateProperty(req.params.id, req.body);
-      if (!property) return res.status(404).json({ error: "Imóvel não encontrado" });
-      res.json(property);
-    } catch (error) {
-      console.error("Update property error:", error);
-      res.status(500).json({ error: "Erro ao atualizar imóvel" });
-    }
-  });
-
-  app.delete("/api/properties/:id", requireAuth, async (req, res) => {
-    try {
-      await storage.deleteProperty(req.params.id);
-      res.json({ success: true });
-    } catch (error: any) {
-      if (error.code === '23503') {
-        return res.status(400).json({ 
-          error: "Não é possível excluir este imóvel pois existem registros vinculados a ele (contratos, etc)." 
-        });
+      if (files['cert'] && files['cert'][0]) {
+        updateData.interCertPath = files['cert'][0].path;
       }
-      console.error("Delete property error:", error);
-      console.error("Error code:", error.code); // Debug log
-      res.status(500).json({ error: "Erro ao excluir imóvel" });
+      if (files['key'] && files['key'][0]) {
+        updateData.interKeyPath = files['key'][0].path;
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        const company = await storage.updateCompany(companyId, updateData);
+        res.json({ success: true, company });
+      } else {
+        res.json({ success: true, message: "Nenhum arquivo enviado" });
+      }
+    } catch (error) {
+      console.error("Upload cert error:", error);
+      res.status(500).json({ error: "Erro ao fazer upload dos certificados" });
     }
   });
 
+  // Clients (Clientes)
+  app.get("/api/clients", requireAuth, async (req, res) => {
+    try {
+      const clients = await storage.getClients();
+      res.json(clients);
+    } catch (error) {
+      console.error("Get clients error:", error);
+      res.status(500).json({ error: "Erro ao buscar clientes" });
+    }
+  });
+
+  app.post("/api/clients", requireAuth, async (req, res) => {
+    try {
+      const client = await storage.createClient(req.body);
+      res.status(201).json(client);
+    } catch (error) {
+      console.error("Create client error:", error);
+      res.status(500).json({ error: "Erro ao criar cliente" });
+    }
+  });
+
+  app.patch("/api/clients/:id", requireAuth, async (req, res) => {
+    try {
+      const client = await storage.updateClient(req.params.id, req.body);
+      if (!client) return res.status(404).json({ error: "Cliente não encontrado" });
+      res.json(client);
+    } catch (error) {
+      console.error("Update client error:", error);
+      res.status(500).json({ error: "Erro ao atualizar cliente" });
+    }
+  });
+
+  app.delete("/api/clients/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteClient(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete client error:", error);
+      res.status(500).json({ error: "Erro ao excluir cliente" });
+    }
+  });
+
+  // Analysts (Analistas)
+  app.get("/api/analysts", requireAuth, async (req, res) => {
+    try {
+      const analysts = await storage.getAnalysts();
+      res.json(analysts);
+    } catch (error) {
+      console.error("Get analysts error:", error);
+      res.status(500).json({ error: "Erro ao buscar analistas" });
+    }
+  });
+
+  app.post("/api/analysts", requireAuth, async (req, res) => {
+    try {
+      const analyst = await storage.createAnalyst(req.body);
+      res.status(201).json(analyst);
+    } catch (error) {
+      console.error("Create analyst error:", error);
+      res.status(500).json({ error: "Erro ao criar analista" });
+    }
+  });
+
+  app.patch("/api/analysts/:id", requireAuth, async (req, res) => {
+    try {
+      const analyst = await storage.updateAnalyst(req.params.id, req.body);
+      if (!analyst) return res.status(404).json({ error: "Analista não encontrado" });
+      res.json(analyst);
+    } catch (error) {
+      console.error("Update analyst error:", error);
+      res.status(500).json({ error: "Erro ao atualizar analista" });
+    }
+  });
+
+  app.delete("/api/analysts/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteAnalyst(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete analyst error:", error);
+      res.status(500).json({ error: "Erro ao excluir analista" });
+    }
+  });
+
+  // Partners (Parcerias)
+  app.get("/api/partners", requireAuth, async (req, res) => {
+    try {
+      const partners = await storage.getPartners();
+      res.json(partners);
+    } catch (error) {
+      console.error("Get partners error:", error);
+      res.status(500).json({ error: "Erro ao buscar parcerias" });
+    }
+  });
+
+  app.post("/api/partners", requireAuth, async (req, res) => {
+    try {
+      const partner = await storage.createPartner(req.body);
+      res.status(201).json(partner);
+    } catch (error) {
+      console.error("Create partner error:", error);
+      res.status(500).json({ error: "Erro ao criar parceria" });
+    }
+  });
+
+  app.patch("/api/partners/:id", requireAuth, async (req, res) => {
+    try {
+      const partner = await storage.updatePartner(req.params.id, req.body);
+      if (!partner) return res.status(404).json({ error: "Parceria não encontrada" });
+      res.json(partner);
+    } catch (error) {
+      console.error("Update partner error:", error);
+      res.status(500).json({ error: "Erro ao atualizar parceria" });
+    }
+  });
+
+  app.delete("/api/partners/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deletePartner(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete partner error:", error);
+      res.status(500).json({ error: "Erro ao excluir parceria" });
+    }
+  });
+
+  // System Contracts
+  app.get("/api/system-contracts", requireAuth, async (req, res) => {
+    try {
+      const contracts = await storage.getSystemContracts();
+      res.json(contracts);
+    } catch (error) {
+      console.error("Get system contracts error:", error);
+      res.status(500).json({ error: "Erro ao buscar contratos de sistema" });
+    }
+  });
+
+  app.get("/api/system-contracts/:id", requireAuth, async (req, res) => {
+    try {
+      const contract = await storage.getSystemContract(req.params.id);
+      if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
+      res.json(contract);
+    } catch (error) {
+      console.error("Get system contract error:", error);
+      res.status(500).json({ error: "Erro ao buscar contrato de sistema" });
+    }
+  });
+
+  app.post("/api/system-contracts", requireAuth, async (req, res) => {
+    try {
+      console.log("[SystemContracts] Creating with body:", req.body);
+      const contract = await storage.createSystemContract(req.body);
+      res.status(201).json(contract);
+    } catch (error) {
+      console.error("Create system contract error:", error);
+      res.status(500).json({ error: "Erro ao criar contrato de sistema" });
+    }
+  });
+
+  app.patch("/api/system-contracts/:id", requireAuth, async (req, res) => {
+    try {
+      console.log(`[SystemContracts] Updating ${req.params.id} with body:`, req.body);
+      const contract = await storage.updateSystemContract(req.params.id, req.body);
+      if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
+      res.json(contract);
+    } catch (error) {
+      console.error("Update system contract error:", error);
+      res.status(500).json({ error: "Erro ao atualizar contrato de sistema" });
+    }
+  });
+
+  app.delete("/api/system-contracts/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteSystemContract(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete system contract error:", error);
+      res.status(500).json({ error: "Erro ao excluir contrato de sistema" });
+    }
+  });
+
+  // Projects
+  app.get("/api/projects", requireAuth, async (req, res) => {
+    try {
+      const projects = await storage.getProjects();
+      res.json(projects);
+    } catch (error) {
+      console.error("Get projects error:", error);
+      res.status(500).json({ error: "Erro ao buscar projetos" });
+    }
+  });
+
+  app.get("/api/projects/:id", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: "Projeto não encontrado" });
+      res.json(project);
+    } catch (error) {
+      console.error("Get project error:", error);
+      res.status(500).json({ error: "Erro ao buscar projeto" });
+    }
+  });
+
+  app.post("/api/projects", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.createProject(req.body);
+      res.status(201).json(project);
+    } catch (error) {
+      console.error("Create project error:", error);
+      res.status(500).json({ error: "Erro ao criar projeto" });
+    }
+  });
+
+  app.patch("/api/projects/:id", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.updateProject(req.params.id, req.body);
+      if (!project) return res.status(404).json({ error: "Projeto não encontrado" });
+      res.json(project);
+    } catch (error) {
+      console.error("Update project error:", error);
+      res.status(500).json({ error: "Erro ao atualizar projeto" });
+    }
+  });
+
+  app.delete("/api/projects/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteProject(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete project error:", error);
+      res.status(500).json({ error: "Erro ao excluir projeto" });
+    }
+  });
+
+  // Project Analysts
+  app.get("/api/projects/:id/analysts", requireAuth, async (req, res) => {
+    try {
+      const analysts = await storage.getProjectAnalysts(req.params.id);
+      res.json(analysts);
+    } catch (error) {
+      console.error("Get project analysts error:", error);
+      res.status(500).json({ error: "Erro ao buscar analistas do projeto" });
+    }
+  });
+
+  app.post("/api/project-analysts", requireAuth, async (req, res) => {
+    try {
+      const relation = await storage.addProjectAnalyst(req.body);
+      res.status(201).json(relation);
+    } catch (error) {
+      console.error("Add project analyst error:", error);
+      res.status(500).json({ error: "Erro ao vincular analista ao projeto" });
+    }
+  });
+
+  app.patch("/api/project-analysts/:id", requireAuth, async (req, res) => {
+    try {
+      const relation = await storage.updateProjectAnalyst(req.params.id, req.body);
+      if (!relation) return res.status(404).json({ error: "Vínculo não encontrado" });
+      res.json(relation);
+    } catch (error) {
+      console.error("Update project analyst error:", error);
+      res.status(500).json({ error: "Erro ao atualizar analista do projeto" });
+    }
+  });
+
+  app.delete("/api/project-analysts/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.removeProjectAnalyst(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Remove project analyst error:", error);
+      res.status(500).json({ error: "Erro ao remover analista do projeto" });
+    }
+  });
+
+  // Partners
+  app.get("/api/partners", requireAuth, async (req, res) => {
+    try {
+      const partners = await storage.getPartners();
+      res.json(partners);
+    } catch (error) {
+      console.error("Get partners error:", error);
+      res.status(500).json({ error: "Erro ao buscar parcerias" });
+    }
+  });
+
+  app.post("/api/partners", requireAuth, async (req, res) => {
+    try {
+      const partner = await storage.createPartner(req.body);
+      res.status(201).json(partner);
+    } catch (error) {
+      console.error("Create partner error:", error);
+      res.status(500).json({ error: "Erro ao criar parceria" });
+    }
+  });
+
+  app.patch("/api/partners/:id", requireAuth, async (req, res) => {
+    try {
+      const partner = await storage.updatePartner(req.params.id, req.body);
+      if (!partner) return res.status(404).json({ error: "Parceria não encontrada" });
+      res.json(partner);
+    } catch (error) {
+      console.error("Update partner error:", error);
+      res.status(500).json({ error: "Erro ao atualizar parceria" });
+    }
+  });
+
+  app.delete("/api/partners/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deletePartner(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete partner error:", error);
+      res.status(500).json({ error: "Erro ao excluir parceria" });
+    }
+  });
+
+  // Service Catalog (Serviços)
+  app.get("/api/service-catalog", requireAuth, async (req, res) => {
+    try {
+      const catalog = await storage.getServiceCatalog();
+      res.json(catalog);
+    } catch (error) {
+      console.error("Get service catalog error:", error);
+      res.status(500).json({ error: "Erro ao buscar catálogo de serviços" });
+    }
+  });
+
+  app.post("/api/service-catalog", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.createServiceCatalogItem(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      console.error("Create service catalog item error:", error);
+      res.status(500).json({ error: "Erro ao criar serviço" });
+    }
+  });
+
+  app.patch("/api/service-catalog/:id", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.updateServiceCatalogItem(req.params.id, req.body);
+      if (!item) return res.status(404).json({ error: "Serviço não encontrado" });
+      res.json(item);
+    } catch (error) {
+      console.error("Update service catalog item error:", error);
+      res.status(500).json({ error: "Erro ao atualizar serviço" });
+    }
+  });
+
+  app.delete("/api/service-catalog/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteServiceCatalogItem(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete service catalog item error:", error);
+      res.status(500).json({ error: "Erro ao excluir serviço" });
+    }
+  });
+
+  // Contracts
   app.get("/api/contracts", requireAuth, async (req, res) => {
     try {
       const contracts = await storage.getContracts();
@@ -350,6 +973,16 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Get contracts error:", error);
       res.status(500).json({ error: "Erro ao buscar contratos" });
+    }
+  });
+
+  app.post("/api/contracts", requireAuth, async (req, res) => {
+    try {
+      const contract = await storage.createContract(req.body);
+      res.status(201).json(contract);
+    } catch (error) {
+      console.error("Create contract error:", error);
+      res.status(500).json({ error: "Erro ao criar contrato" });
     }
   });
 
@@ -361,16 +994,6 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Get contract error:", error);
       res.status(500).json({ error: "Erro ao buscar contrato" });
-    }
-  });
-
-  app.post("/api/contracts", requireAuth, async (req, res) => {
-    try {
-      const contract = await storage.createContract(req.body);
-      res.status(201).json(contract);
-    } catch (error) {
-      console.error("Create contract error:", error);
-      res.status(500).json({ error: "Erro ao criar contrato" });
     }
   });
 
@@ -395,30 +1018,56 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/contracts/:id/draft-receipts", requireAuth, async (req, res) => {
+  // Contract Items
+  app.get("/api/contracts/:id/items", requireAuth, async (req, res) => {
     try {
-      await storage.deleteDraftReceiptsByContractId(req.params.id);
-      res.json({ success: true });
+      const items = await storage.getContractItems(req.params.id);
+      res.json(items);
     } catch (error) {
-      console.error("Delete draft receipts error:", error);
-      res.status(500).json({ error: "Erro ao excluir recibos em rascunho" });
+      console.error("Get contract items error:", error);
+      res.status(500).json({ error: "Erro ao buscar itens do contrato" });
     }
   });
 
-  app.get("/api/services", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/items", requireAuth, async (req, res) => {
     try {
-      const services = await storage.getServices();
-      res.json(services);
+      const item = await storage.createContractItem({ ...req.body, contractId: req.params.id });
+      res.status(201).json(item);
     } catch (error) {
-      console.error("Get services error:", error);
-      res.status(500).json({ error: "Erro ao buscar serviços" });
+      console.error("Create contract item error:", error);
+      res.status(500).json({ error: "Erro ao criar item do contrato" });
+    }
+  });
+
+  app.delete("/api/contract-items/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteContractItem(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete contract item error:", error);
+      res.status(500).json({ error: "Erro ao excluir item do contrato" });
+    }
+  });
+
+  // Services (Contract Items) - Mapped to match frontend expectations
+  app.get("/api/contracts/:id/services/:year/:month", requireAuth, async (req, res) => {
+    try {
+      const items = await storage.getContractItemsByRef(
+        req.params.id, 
+        parseInt(req.params.year), 
+        parseInt(req.params.month)
+      );
+      res.json(items);
+    } catch (error) {
+      console.error("Get contract services error:", error);
+      res.status(500).json({ error: "Erro ao buscar serviços do contrato" });
     }
   });
 
   app.post("/api/services", requireAuth, async (req, res) => {
     try {
-      const service = await storage.createService(req.body);
-      res.status(201).json(service);
+      const item = await storage.createContractItem(req.body);
+      res.status(201).json(item);
     } catch (error) {
       console.error("Create service error:", error);
       res.status(500).json({ error: "Erro ao criar serviço" });
@@ -427,9 +1076,9 @@ export async function registerRoutes(
 
   app.patch("/api/services/:id", requireAuth, async (req, res) => {
     try {
-      const service = await storage.updateService(req.params.id, req.body);
-      if (!service) return res.status(404).json({ error: "Serviço não encontrado" });
-      res.json(service);
+      const item = await storage.updateContractItem(req.params.id, req.body);
+      if (!item) return res.status(404).json({ error: "Serviço não encontrado" });
+      res.json(item);
     } catch (error) {
       console.error("Update service error:", error);
       res.status(500).json({ error: "Erro ao atualizar serviço" });
@@ -438,7 +1087,7 @@ export async function registerRoutes(
 
   app.delete("/api/services/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteService(req.params.id);
+      await storage.deleteContractItem(req.params.id);
       res.json({ success: true });
     } catch (error) {
       console.error("Delete service error:", error);
@@ -446,52 +1095,79 @@ export async function registerRoutes(
     }
   });
 
+  // Receipts
   app.get("/api/receipts", requireAuth, async (req, res) => {
     try {
-      const year = parseInt(req.query.year as string) || new Date().getFullYear();
-      const month = parseInt(req.query.month as string) || new Date().getMonth() + 1;
-      const [receipts, transfers] = await Promise.all([
-        storage.getReceiptsByRef(year, month),
-        storage.getLandlordTransfersReport(year, month, "ref")
-      ]);
-
-      const transferReceiptIds = new Set(transfers.map(t => t.receiptId));
-
+      const { year, month } = req.query;
+      let receipts;
+      
+      if (year && month) {
+        receipts = await storage.getReceiptsByRef(Number(year), Number(month));
+      } else {
+        receipts = await storage.getReceipts();
+      }
+      
+      // Calculate costs and company name for each receipt
       const enrichedReceipts = await Promise.all(receipts.map(async (receipt) => {
-        const hasTransfer = transferReceiptIds.has(receipt.id);
+        let totalCost = 0;
+        let companyName = "";
+        
+        if (receipt.projectId) {
+          const project = await storage.getProject(receipt.projectId);
+          if (project) {
+            const company = await storage.getCompany(project.companyId);
+            companyName = company?.name || "";
+          }
 
-        if (receipt.status === 'paid' || receipt.status === 'transferred') {
-          return { ...receipt, outdated: false, hasTransfer };
+          const timesheetEntries = await storage.getTimesheetEntries(receipt.id);
+          const processedFixed = new Set<string>();
+          
+          totalCost = timesheetEntries.reduce((sum, entry) => {
+            if (entry.analystPaymentType === "fixed") {
+              const personId = entry.analystId || entry.partnerId;
+              // Only add fixed cost once per person per receipt
+              if (personId && !processedFixed.has(personId)) {
+                processedFixed.add(personId);
+                return sum + Number(entry.costRate || 0);
+              }
+              return sum;
+            } else {
+              return sum + (Number(entry.hours) * Number(entry.costRate || 0));
+            }
+          }, 0);
+        } else if (receipt.contractId) {
+          const contract = await storage.getContract(receipt.contractId);
+          if (contract) {
+             const company = await storage.getCompany(contract.companyId);
+             companyName = company?.name || "";
+          }
+        } else if (receipt.systemContractId) {
+           // For system contracts, company name is stored directly
+           const systemContract = await storage.getSystemContract(receipt.systemContractId);
+           companyName = systemContract?.companyName || "";
         }
-
-        const contractServices = await storage.getServicesByContractAndRef(
-          receipt.contractId,
-          receipt.refYear,
-          receipt.refMonth
-        );
-
-        const servicesTenantTotal = contractServices
-          .filter((s) => s.chargedTo === "TENANT")
-          .reduce((sum, s) => sum + Number(s.amount), 0);
-
-        const servicesLandlordTotal = contractServices
-          .filter((s) => s.chargedTo === "LANDLORD")
-          .reduce((sum, s) => sum + Number(s.amount), 0);
-
-        const storedTenantTotal = Number(receipt.servicesTenantTotal || 0);
-        const storedLandlordTotal = Number(receipt.servicesLandlordTotal || 0);
-
-        const outdated =
-          Math.abs(servicesTenantTotal - storedTenantTotal) > 0.01 ||
-          Math.abs(servicesLandlordTotal - storedLandlordTotal) > 0.01;
-
-        return { ...receipt, outdated, hasTransfer };
+        
+        return {
+          ...receipt,
+          totalCost: totalCost.toString(),
+          companyName
+        };
       }));
-
+      
       res.json(enrichedReceipts);
     } catch (error) {
       console.error("Get receipts error:", error);
       res.status(500).json({ error: "Erro ao buscar recibos" });
+    }
+  });
+
+  app.post("/api/receipts", requireAuth, async (req, res) => {
+    try {
+      const receipt = await storage.createReceipt(req.body);
+      res.status(201).json(receipt);
+    } catch (error) {
+      console.error("Create receipt error:", error);
+      res.status(500).json({ error: "Erro ao criar recibo" });
     }
   });
 
@@ -506,142 +1182,194 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/receipts/:id", requireAuth, async (req, res) => {
+    try {
+      const receipt = await storage.updateReceipt(req.params.id, req.body);
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+      res.json(receipt);
+    } catch (error) {
+      console.error("Update receipt error:", error);
+      res.status(500).json({ error: "Erro ao atualizar recibo" });
+    }
+  });
+
   app.post("/api/receipts/generate", requireAuth, async (req, res) => {
     try {
       const { year, month } = req.body;
-      const activeContracts = await storage.getActiveContracts();
-      const created: any[] = [];
+      if (!year || !month) return res.status(400).json({ error: "Ano e mês são obrigatórios" });
 
+      const contracts = await storage.getContracts();
+      const activeContracts = contracts.filter(c => c.status === "active");
+      let count = 0;
+
+      // Generate for Contracts
       for (const contract of activeContracts) {
-        const existingReceipt = await storage.getReceiptByContractAndRef(contract.id, year, month);
-        if (existingReceipt) continue;
-
-        const contractServices = await storage.getServicesByContractAndRef(contract.id, year, month);
-        const servicesTenantTotal = contractServices
-          .filter((s) => s.chargedTo === "TENANT")
+        // Calculate services amount
+        const services = await storage.getContractItemsByRef(contract.id, year, month);
+        const servicesAmount = services
+          .filter(s => s.chargedTo === "CLIENT")
           .reduce((sum, s) => sum + Number(s.amount), 0);
-        const servicesLandlordTotal = contractServices
-          .filter((s) => s.chargedTo === "LANDLORD")
-          .reduce((sum, s) => sum + Number(s.amount), 0);
-        const servicesTenantPassThroughTotal = contractServices
-          .filter((s) => s.chargedTo === "TENANT" && s.passThrough)
-          .reduce((sum, s) => sum + Number(s.amount), 0);
+        
+        const totalDue = Number(contract.amount) + servicesAmount;
 
-        const rentAmount = Number(contract.rentAmount);
-        const adminFeePercent = Number(contract.adminFeePercent);
-        const adminFeeAmount = (rentAmount * adminFeePercent) / 100;
-        const tenantTotalDue = rentAmount + servicesTenantTotal;
-        const landlordTotalDue = rentAmount - adminFeeAmount - servicesLandlordTotal + servicesTenantPassThroughTotal;
-
-        const receipt = await storage.createReceipt({
-          contractId: contract.id,
-          refYear: year,
-          refMonth: month,
-          rentAmount: String(rentAmount),
-          adminFeePercent: String(adminFeePercent),
-          adminFeeAmount: String(adminFeeAmount),
-          servicesTenantTotal: String(servicesTenantTotal),
-          servicesLandlordTotal: String(servicesLandlordTotal),
-          tenantTotalDue: String(tenantTotalDue),
-          landlordTotalDue: String(landlordTotalDue),
-          status: "draft",
-        });
-        created.push(receipt);
+        const existing = await storage.getReceiptByContractAndRef(contract.id, year, month);
+        
+        if (existing) {
+          if (existing.status === "draft") {
+             await storage.updateReceipt(existing.id, {
+               amount: contract.amount,
+               servicesAmount: servicesAmount.toString(),
+               totalDue: totalDue.toString()
+             });
+          }
+        } else {
+          await storage.createReceipt({
+            contractId: contract.id,
+            refYear: year,
+            refMonth: month,
+            amount: contract.amount,
+            servicesAmount: servicesAmount.toString(),
+            totalDue: totalDue.toString(),
+            status: "draft"
+          });
+          count++;
+        }
       }
 
-      res.json({ created: created.length, receipts: created });
+      // Generate for Active Billable Projects
+      const projects = await storage.getProjects();
+      const activeProjects = projects.filter(p => p.active && p.isBillable);
+
+      for (const project of activeProjects) {
+        const existing = await storage.getReceiptByProjectAndRef(project.id, year, month);
+
+        if (!existing) {
+          await storage.createReceipt({
+            projectId: project.id,
+            refYear: year,
+            refMonth: month,
+            amount: "0", // Will be calculated based on hours
+            servicesAmount: "0",
+            totalDue: "0",
+            status: "draft"
+          });
+          count++;
+        }
+      }
+
+      // Generate for Active System Contracts
+      const systemContracts = await storage.getSystemContracts();
+      const activeSystemContracts = systemContracts.filter(sc => sc.active);
+
+      for (const systemContract of activeSystemContracts) {
+        const existing = await storage.getReceiptBySystemContractAndRef(systemContract.id, year, month);
+
+        if (!existing) {
+          await storage.createReceipt({
+            systemContractId: systemContract.id,
+            refYear: year,
+            refMonth: month,
+            amount: systemContract.monthlyValue,
+            servicesAmount: "0",
+            totalDue: systemContract.monthlyValue,
+            status: "draft"
+          });
+          count++;
+        }
+      }
+      
+      res.json({ success: true, count });
     } catch (error) {
       console.error("Generate receipts error:", error);
       res.status(500).json({ error: "Erro ao gerar recibos" });
     }
   });
 
-  app.post("/api/receipts/:id/regenerate", requireAuth, async (req, res) => {
+  app.post("/api/receipts/recalculate", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
-      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      
-      if (receipt.status === "transferred" || receipt.status === "paid") {
-        return res.status(400).json({ error: "Não é possível regerar um recibo pago ou repassado. Faça o estorno primeiro." });
+      const { year, month } = req.body;
+      if (!year || !month) return res.status(400).json({ error: "Ano e mês são obrigatórios" });
+
+      const receipts = await storage.getReceiptsByRef(Number(year), Number(month));
+      let updatedCount = 0;
+
+      for (const receipt of receipts) {
+        // Only process project receipts
+        if (!receipt.projectId) continue;
+
+        const project = await storage.getProject(receipt.projectId);
+        if (!project) continue;
+
+        const timesheets = await storage.getTimesheetEntries(receipt.id);
+        const analysts = await storage.getProjectAnalysts(project.id);
+        const partners = await storage.getProjectPartners(project.id);
+        let hasChanges = false;
+
+        for (const entry of timesheets) {
+            let newCostRate = entry.costRate;
+            let newBillableRate = entry.billableRate;
+            let newAnalystPaymentType = entry.analystPaymentType;
+            
+            if (entry.analystId) {
+                const relation = analysts.find(a => a.analystId === entry.analystId);
+                if (relation) {
+                    // Update payment type from analyst record
+                    newAnalystPaymentType = relation.analyst.paymentType;
+                    
+                    // Logic for Cost Rate (Pagar)
+                    // 1. Try project-specific cost rate
+                    let cost = relation.costRate?.toString();
+                    
+                    // 2. If fixed payment and no project cost, try analyst fixed value
+                    if ((!cost || cost === "0") && relation.analyst.paymentType === "fixed") {
+                        cost = relation.analyst.fixedValue?.toString();
+                    }
+                    
+                    newCostRate = cost || "0";
+
+                    // Logic for Billable Rate (Receber)
+                    // 1. Try project-specific hourly rate
+                    const relationRate = relation.hourlyRate?.toString();
+                    newBillableRate = relationRate && relationRate !== "0" 
+                      ? relationRate 
+                      : (project.hourlyRate?.toString() || "0");
+                }
+            } else if (entry.partnerId) {
+                const relation = partners.find(p => p.partnerId === entry.partnerId);
+                if (relation) {
+                    // Update payment type logic for partners (assuming fixed/hourly from relation)
+                    if (relation.valueType === "fixed") {
+                        newAnalystPaymentType = "fixed";
+                        newCostRate = relation.value?.toString() || "0";
+                    } else {
+                        newAnalystPaymentType = "hour";
+                        newCostRate = relation.value?.toString() || "0";
+                    }
+                }
+            }
+
+            if (newCostRate !== entry.costRate || 
+                newBillableRate !== entry.billableRate || 
+                newAnalystPaymentType !== entry.analystPaymentType) {
+                
+                await storage.updateTimesheetEntry(entry.id, {
+                    costRate: newCostRate,
+                    billableRate: newBillableRate,
+                    analystPaymentType: newAnalystPaymentType
+                });
+                hasChanges = true;
+            }
+        }
+        
+        // Recalculate receipt totals
+        await recalculateReceiptTotal(receipt.id);
+        updatedCount++;
       }
 
-      const contract = await storage.getContract(receipt.contractId);
-      if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
-
-      const contractServices = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
-      const servicesTenantTotal = contractServices
-        .filter((s) => s.chargedTo === "TENANT")
-        .reduce((sum, s) => sum + Number(s.amount), 0);
-      const servicesLandlordTotal = contractServices
-        .filter((s) => s.chargedTo === "LANDLORD")
-        .reduce((sum, s) => sum + Number(s.amount), 0);
-      const servicesTenantPassThroughTotal = contractServices
-        .filter((s) => s.chargedTo === "TENANT" && s.passThrough)
-        .reduce((sum, s) => sum + Number(s.amount), 0);
-
-      const rentAmount = Number(contract.rentAmount);
-      const adminFeePercent = Number(contract.adminFeePercent);
-      const adminFeeAmount = (rentAmount * adminFeePercent) / 100;
-      const tenantTotalDue = rentAmount + servicesTenantTotal;
-      const landlordTotalDue = rentAmount - adminFeeAmount - servicesLandlordTotal + servicesTenantPassThroughTotal;
-
-      const updated = await storage.updateReceipt(receipt.id, {
-        rentAmount: String(rentAmount),
-        adminFeePercent: String(adminFeePercent),
-        adminFeeAmount: String(adminFeeAmount),
-        servicesTenantTotal: String(servicesTenantTotal),
-        servicesLandlordTotal: String(servicesLandlordTotal),
-        tenantTotalDue: String(tenantTotalDue),
-        landlordTotalDue: String(landlordTotalDue),
-        // Mantém o status atual (draft ou closed)
-      });
-
-      res.json(updated);
+      res.json({ success: true, updatedCount });
     } catch (error) {
-      console.error("Regenerate receipt error:", error);
-      res.status(500).json({ error: `Erro ao regerar recibo: ${(error as Error).message}` });
-    }
-  });
-
-  // Rota para buscar serviços de um contrato específico em um mês/ano (usado nos detalhes do recibo)
-  app.get("/api/contracts/:id/services/:year/:month", requireAuth, async (req, res) => {
-    try {
-      const services = await storage.getServicesByContractAndRef(
-        req.params.id, 
-        parseInt(req.params.year), 
-        parseInt(req.params.month)
-      );
-      res.json(services);
-    } catch (error) {
-      console.error("Get contract services error:", error);
-      res.status(500).json({ error: "Erro ao buscar serviços do contrato" });
-    }
-  });
-
-  app.get("/api/reports/landlord-transfers", requireAuth, async (req, res) => {
-    try {
-      const year = parseInt(req.query.year as string) || new Date().getFullYear();
-      const month = parseInt(req.query.month as string) || new Date().getMonth() + 1;
-      const type = (req.query.type as "ref" | "paid") || "ref";
-      
-      const transfers = await storage.getLandlordTransfersReport(year, month, type);
-      res.json(transfers);
-    } catch (error) {
-      console.error("Get landlord transfers report error:", error);
-      res.status(500).json({ error: "Erro ao buscar relatório de repasses" });
-    }
-  });
-
-  app.get("/api/reports/revenue", requireAuth, async (req, res) => {
-    try {
-      const year = parseInt(req.query.year as string) || new Date().getFullYear();
-      const month = parseInt(req.query.month as string) || new Date().getMonth() + 1;
-      
-      const revenue = await storage.getRevenueReport(year, month);
-      res.json(revenue);
-    } catch (error) {
-      console.error("Get revenue report error:", error);
-      res.status(500).json({ error: "Erro ao buscar relatório de receita" });
+      console.error("Recalculate receipts error:", error);
+      res.status(500).json({ error: "Erro ao recalcular recibos" });
     }
   });
 
@@ -649,9 +1377,12 @@ export async function registerRoutes(
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      if (receipt.status !== "draft") return res.status(400).json({ error: "Recibo não está em rascunho" });
 
-      const updated = await storage.updateReceipt(req.params.id, { status: "closed" });
+      if (receipt.status !== "draft") {
+        return res.status(400).json({ error: "Recibo já está fechado ou pago" });
+      }
+
+      const updated = await storage.updateReceipt(receipt.id, { status: "closed" });
       res.json(updated);
     } catch (error) {
       console.error("Close receipt error:", error);
@@ -659,96 +1390,32 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/receipts/:id/reopen", requireAuth, async (req, res) => {
-    try {
-      const receipt = await storage.getReceipt(req.params.id);
-      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      if (receipt.status !== "closed") return res.status(400).json({ error: "Recibo não está fechado" });
-
-      if (receipt.isInvoiceGenerated || receipt.isInvoiceIssued || receipt.isInvoiceCancelled) {
-        if (receipt.isInvoiceIssued || receipt.isInvoiceCancelled) {
-          return res.status(400).json({ error: "Não é possível reabrir recibo com nota fiscal emitida ou cancelada." });
-        }
-        return res.status(400).json({ error: "Exclua a nota fiscal gerada antes de reabrir o recibo." });
-      }
-
-      const updated = await storage.updateReceipt(req.params.id, { status: "draft" });
-      res.json(updated);
-    } catch (error) {
-      console.error("Reopen receipt error:", error);
-      res.status(500).json({ error: "Erro ao reabrir recibo" });
-    }
-  });
-
-  app.post("/api/receipts/:id/emit-slip", requireAuth, async (req, res) => {
-    try {
-      const receipt = await storage.getReceipt(req.params.id);
-      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-
-      if (receipt.isSlipIssued) {
-        return res.status(400).json({ error: "Boleto já emitido para este recibo" });
-      }
-
-      if (receipt.status === "paid" || receipt.status === "transferred") {
-        return res.status(400).json({ error: "Recibo já pago ou repassado" });
-      }
-
-      const updated = await storage.updateReceipt(receipt.id, {
-        isSlipIssued: true,
-      });
-
-      res.json(updated);
-    } catch (error) {
-      console.error("Emit slip error:", error);
-      res.status(500).json({ error: "Erro ao emitir boleto" });
-    }
-  });
-
-  app.post("/api/receipts/:id/cancel-slip", requireAuth, async (req, res) => {
-    try {
-      const receipt = await storage.getReceipt(req.params.id);
-      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-
-      if (!receipt.isSlipIssued) {
-        return res.status(400).json({ error: "Boleto não foi emitido para este recibo" });
-      }
-
-      if (receipt.status === "paid" || receipt.status === "transferred") {
-        return res.status(400).json({ error: "Não é possível cancelar boleto de recibo pago ou repassado" });
-      }
-
-      const updated = await storage.updateReceipt(receipt.id, {
-        isSlipIssued: false,
-      });
-
-      res.json(updated);
-    } catch (error) {
-      console.error("Cancel slip error:", error);
-      res.status(500).json({ error: "Erro ao cancelar boleto" });
-    }
-  });
-
   app.post("/api/receipts/:id/mark-paid", requireAuth, async (req, res) => {
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      if (receipt.status !== "closed") return res.status(400).json({ error: "Recibo não está fechado" });
 
-      const updated = await storage.updateReceipt(req.params.id, { status: "paid" });
+      if (receipt.status === "paid" || receipt.status === "transferred") {
+        return res.status(400).json({ error: "Recibo já está pago" });
+      }
 
+      // 1. Update receipt status
+      const updated = await storage.updateReceipt(receipt.id, { status: "paid" });
+
+      // 2. Create cash transaction (Receita)
       await storage.createCashTransaction({
         type: "IN",
-        date: new Date().toISOString().split("T")[0],
-        category: "Aluguel",
-        description: `Pagamento recibo ${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}`,
-        amount: receipt.tenantTotalDue,
-        receiptId: receipt.id,
+        date: new Date().toISOString().split("T")[0], // Today
+        category: "Receita de Contratos",
+        description: `Recebimento Ref. ${receipt.refMonth}/${receipt.refYear}`,
+        amount: receipt.totalDue,
+        receiptId: receipt.id
       });
 
       res.json(updated);
     } catch (error) {
-      console.error("Mark paid error:", error);
-      res.status(500).json({ error: "Erro ao marcar como pago" });
+      console.error("Mark paid receipt error:", error);
+      res.status(500).json({ error: "Erro ao marcar recibo como pago" });
     }
   });
 
@@ -756,630 +1423,316 @@ export async function registerRoutes(
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      if (receipt.status !== "paid") return res.status(400).json({ error: "Recibo não está pago" });
 
-      // Verificar se o recibo já foi repassado? 
-      // Se status é "paid", tecnicamente não está "transferred", mas vamos garantir que não há repasse em andamento/pago.
-      // Se houvesse repasse, o status do recibo seria "transferred" (ou o repasse estaria "pending"/"paid").
-      // Se o status é "paid", o repasse pode ter sido criado mas falhado, ou excluído, ou ainda não criado.
-      
-      // Vamos reverter para 'closed'
-      const updated = await storage.updateReceipt(req.params.id, { status: "closed" });
+      if (receipt.status !== "paid" && receipt.status !== "transferred") {
+        return res.status(400).json({ error: "Recibo não está pago" });
+      }
 
-      // Remover transação de entrada do caixa
+      // 1. Update receipt status back to closed
+      const updated = await storage.updateReceipt(receipt.id, { status: "closed" });
+
+      // 2. Remove cash transaction
       await storage.deleteCashTransactionByReceiptAndType(receipt.id, "IN");
 
       res.json(updated);
     } catch (error) {
-      console.error("Reverse payment error:", error);
+      console.error("Reverse payment receipt error:", error);
       res.status(500).json({ error: "Erro ao estornar pagamento" });
     }
   });
 
-  app.post("/api/receipts/:id/create-transfer", requireAuth, async (req, res) => {
+  app.delete("/api/receipts/:id", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
-      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      if (receipt.status !== "paid") return res.status(400).json({ error: "Recibo não está pago" });
-
-      const contract = await storage.getContract(receipt.contractId);
-      if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
-
-      const transfer = await storage.createLandlordTransfer({
-        landlordId: contract.landlordId,
-        receiptId: receipt.id,
-        amount: receipt.landlordTotalDue,
-        status: "pending",
-      });
-
-      res.json(transfer);
+      await storage.deleteReceipt(req.params.id);
+      res.json({ success: true });
     } catch (error) {
-      console.error("Create transfer error:", error);
-      res.status(500).json({ error: "Erro ao criar repasse" });
+      console.error("Delete receipt error:", error);
+      res.status(500).json({ error: "Erro ao excluir recibo" });
     }
   });
 
-  app.post("/api/receipts/:id/create-invoice", requireAuth, async (req, res) => {
+  // Timesheets
+  async function recalculateReceiptTotal(receiptId: string) {
+    const receipt = await storage.getReceipt(receiptId);
+    if (!receipt) return;
+    
+    // Only recalculate for projects
+    if (!receipt.projectId) return;
+    
+    const timesheets = await storage.getTimesheetEntries(receiptId);
+    
+    // Sum billable amount (Hours * BillableRate)
+    const hoursAmount = timesheets.reduce((sum, t) => sum + (Number(t.hours) * Number(t.billableRate)), 0);
+    
+    // Update receipt
+    const totalDue = hoursAmount + Number(receipt.servicesAmount);
+    
+    await storage.updateReceipt(receiptId, {
+      amount: hoursAmount.toString(),
+      totalDue: totalDue.toString()
+    });
+  }
+
+  app.get("/api/receipts/:id/timesheets", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const entries = await storage.getTimesheetEntries(req.params.id);
+      res.json(entries);
+    } catch (error) {
+      console.error("Get timesheets error:", error);
+      res.status(500).json({ error: "Erro ao buscar apontamentos" });
+    }
+  });
+
+  app.post("/api/timesheets", requireAuth, async (req, res) => {
+    try {
+      console.log("[POST /api/timesheets] Body:", req.body);
+      const { receiptId, analystId, partnerId, analystPaymentType } = req.body;
+      let { costRate, billableRate } = req.body;
+
+      // Auto-fetch rates if not provided
+      if (!costRate || !billableRate || billableRate === "0") {
+        console.log("[POST /api/timesheets] Auto-fetching rates...");
+        const receipt = await storage.getReceipt(receiptId);
+        if (receipt && receipt.projectId) {
+          const project = await storage.getProject(receipt.projectId);
+          
+          if (project) {
+            let rateFromRelation = "0";
+
+            if (analystId) {
+              const analysts = await storage.getProjectAnalysts(project.id);
+              console.log(`[POST /api/timesheets] Found ${analysts.length} analysts for project ${project.id}`);
+              const relation = analysts.find(a => a.analystId === analystId);
+              console.log("[POST /api/timesheets] Relation found:", relation);
+              rateFromRelation = relation?.hourlyRate?.toString() || "0";
+              console.log("[POST /api/timesheets] Rate from relation:", rateFromRelation);
+            } else if (partnerId) {
+              const partners = await storage.getProjectPartners(project.id);
+              const relation = partners.find(p => p.partnerId === partnerId);
+              // Only apply hourly rate if the agreement is hourly
+              if (relation?.valueType === "hour") {
+                rateFromRelation = relation.value?.toString() || "0";
+              }
+            }
+
+            // Default billable rate from relation (analyst rate) or project
+            if (!billableRate || billableRate === "0") {
+              billableRate = rateFromRelation !== "0" ? rateFromRelation : (project.hourlyRate?.toString() || "0");
+              console.log("[POST /api/timesheets] Final billableRate:", billableRate);
+            }
+
+            // Cost rate not needed as per requirement, setting to 0 if not provided
+            if (!costRate) {
+              costRate = "0";
+            }
+          }
+        }
+      }
+
+      const entry = await storage.createTimesheetEntry({
+        ...req.body,
+        costRate: costRate?.toString() || "0",
+        billableRate: billableRate?.toString() || "0",
+        analystPaymentType: analystPaymentType || "hour"
+      });
+      
+      await recalculateReceiptTotal(entry.receiptId);
+      res.status(201).json(entry);
+    } catch (error) {
+      console.error("Create timesheet error:", error);
+      res.status(500).json({ error: "Erro ao criar apontamento" });
+    }
+  });
+
+  app.patch("/api/timesheets/:id", requireAuth, async (req, res) => {
+    try {
+      const { analystId, partnerId, analystPaymentType } = req.body;
+      let { costRate, billableRate } = req.body;
+      
+      // Get existing entry to check for changes and get context
+      const existingEntry = await storage.getTimesheetEntry(req.params.id);
+      if (!existingEntry) {
+        return res.status(404).json({ error: "Apontamento não encontrado" });
+      }
+
+      // If changing person and rates are not provided, auto-fetch them
+      if ((analystId || partnerId) && (!costRate || !billableRate || billableRate === "0")) {
+        const receipt = await storage.getReceipt(existingEntry.receiptId);
+        if (receipt && receipt.projectId) {
+          const project = await storage.getProject(receipt.projectId);
+          
+          if (project) {
+            let billableRateFromRelation = "0";
+            let costRateFromRelation = "0";
+            
+            const targetAnalystId = analystId || existingEntry.analystId;
+            const targetPartnerId = partnerId || existingEntry.partnerId;
+
+            // If switching to analyst (or updating analyst)
+            if (analystId || (targetAnalystId && !partnerId)) {
+               const analysts = await storage.getProjectAnalysts(project.id);
+               const relation = analysts.find(a => a.analystId === targetAnalystId);
+               billableRateFromRelation = relation?.hourlyRate?.toString() || "0";
+               costRateFromRelation = relation?.costRate?.toString() || "0";
+            } 
+            // If switching to partner (or updating partner)
+            else if (partnerId || (targetPartnerId && !analystId)) {
+              const partners = await storage.getProjectPartners(project.id);
+              const relation = partners.find(p => p.partnerId === targetPartnerId);
+              if (relation?.valueType === "hour") {
+                billableRateFromRelation = relation.value?.toString() || "0";
+              }
+            }
+
+            // Default billable rate from relation (analyst rate) or project
+            if (!billableRate || billableRate === "0") {
+              billableRate = billableRateFromRelation !== "0" ? billableRateFromRelation : (project.hourlyRate?.toString() || "0");
+            }
+
+            // Cost rate
+            if (!costRate || costRate === "0") {
+              costRate = costRateFromRelation !== "0" ? costRateFromRelation : "0";
+            }
+          }
+        }
+      }
+
+      const updateData = {
+        ...req.body,
+      };
+      
+      if (costRate !== undefined) updateData.costRate = costRate.toString();
+      if (billableRate !== undefined) updateData.billableRate = billableRate.toString();
+      if (analystPaymentType !== undefined) updateData.analystPaymentType = analystPaymentType;
+
+      const entry = await storage.updateTimesheetEntry(req.params.id, updateData);
+      await recalculateReceiptTotal(entry.receiptId);
+      res.json(entry);
+    } catch (error) {
+      console.error("Update timesheet error:", error);
+      res.status(500).json({ error: "Erro ao atualizar apontamento" });
+    }
+  });
+
+  app.delete("/api/timesheets/:id", requireAuth, async (req, res) => {
+    try {
+      const entry = await storage.getTimesheetEntry(req.params.id);
+      if (!entry) {
+        return res.status(404).json({ error: "Apontamento não encontrado" });
+      }
+
+      await storage.deleteTimesheetEntry(req.params.id);
+      await recalculateReceiptTotal(entry.receiptId);
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete timesheet error:", error);
+      res.status(500).json({ error: "Erro ao excluir apontamento" });
+    }
+  });
+
+  // Invoices
+  app.post("/api/invoices", requireAuth, async (req, res) => {
+    try {
+      console.log("POST /api/invoices body:", JSON.stringify(req.body));
+      const { receiptId } = req.body;
+      if (!receiptId) return res.status(400).json({ error: "receiptId is required" });
+
+      const receipt = await storage.getReceipt(receiptId);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      if (receipt.status !== "paid" && receipt.status !== "transferred") {
-        return res.status(400).json({ error: "Recibo deve estar pago ou repassado para emitir NF" });
+
+      // Determine Company and Client details
+      let companyId: string | null = null;
+      let clientId: string | null = null;
+      let providerName = "";
+      let providerDoc = "";
+      let borrowerName = "";
+      let borrowerDoc = "";
+
+      if (receipt.contractId) {
+        const contract = await storage.getContract(receipt.contractId);
+        if (contract) {
+          companyId = contract.companyId;
+          clientId = contract.clientId;
+          
+          const company = await storage.getCompany(companyId);
+          providerName = company?.name || "";
+          providerDoc = company?.doc || "";
+          
+          const client = await storage.getClient(clientId);
+          borrowerName = client?.name || "";
+          borrowerDoc = client?.doc || "";
+        }
+      } else if (receipt.projectId) {
+        const project = await storage.getProject(receipt.projectId);
+        if (project) {
+          companyId = project.companyId;
+          const company = await storage.getCompany(companyId);
+          providerName = company?.name || "";
+          providerDoc = company?.doc || "";
+
+          if (project.clientType === "client" && project.clientId) {
+            clientId = project.clientId;
+            const client = await storage.getClient(clientId);
+            borrowerName = client?.name || "";
+            borrowerDoc = client?.doc || "";
+          } else if (project.clientType === "partner" && project.partnerId) {
+            const partner = await storage.getPartner(project.partnerId);
+            borrowerName = partner?.name || "";
+            borrowerDoc = partner?.cnpj || "";
+          }
+        }
+      } else if (receipt.systemContractId) {
+         const sysContract = await storage.getSystemContract(receipt.systemContractId);
+         if (sysContract) {
+           // Se tiver companyId vinculado, usa ele. Se não, tenta buscar pelo nome ou deixa em branco.
+           if (sysContract.companyId) {
+             companyId = sysContract.companyId;
+             const company = await storage.getCompany(companyId);
+             providerName = company?.name || sysContract.companyName;
+             providerDoc = company?.doc || "";
+           } else {
+             providerName = sysContract.companyName;
+             // Tentar encontrar empresa pelo nome
+             // TODO: Implementar busca por nome se necessário ou forçar migração
+           }
+
+           if (sysContract.clientId) {
+             clientId = sysContract.clientId;
+             const client = await storage.getClient(clientId);
+             borrowerName = client?.name || sysContract.clientName;
+             borrowerDoc = client?.doc || "";
+           } else {
+             borrowerName = sysContract.clientName;
+           }
+         }
       }
 
-      if (receipt.isInvoiceIssued) {
-        return res.status(400).json({ error: "Nota fiscal já emitida para este recibo" });
+      const amounts = Array.isArray(req.body.amounts) ? req.body.amounts : [receipt.totalDue];
+      console.log(`Processing ${amounts.length} invoices with amounts:`, amounts);
+      const invoicesCreated = [];
+
+      for (const amount of amounts) {
+        const invoice = await storage.createInvoice({
+          receiptId,
+          companyId: companyId || undefined,
+          clientId: clientId || undefined,
+          providerName,
+          providerDoc,
+          borrowerName,
+          borrowerDoc,
+          amount: amount.toString(), // Ensure string/decimal
+          status: "PENDENTE",
+        });
+        invoicesCreated.push(invoice);
       }
 
-      const contract = await storage.getContract(receipt.contractId);
-      if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
+      await storage.updateReceipt(receiptId, { isInvoiceGenerated: true, status: "NF_GERADA", isInvoiceCancelled: false });
 
-      const invoice = await storage.createInvoice({
-        landlordId: contract.landlordId,
-        receiptId: receipt.id,
-        amount: receipt.adminFeeAmount,
-        status: "draft",
-      });
-
-      await storage.updateReceipt(receipt.id, { 
-        isInvoiceGenerated: true,
-        isInvoiceIssued: false,
-        isInvoiceCancelled: false 
-      });
-
-      res.json(invoice);
+      res.json(invoicesCreated.length === 1 ? invoicesCreated[0] : invoicesCreated);
     } catch (error) {
       console.error("Create invoice error:", error);
-      res.status(500).json({ error: "Erro ao criar nota fiscal" });
-    }
-  });
-
-  app.get("/api/cash", requireAuth, async (req, res) => {
-    try {
-      const transactions = await storage.getCashTransactions();
-      res.json(transactions);
-    } catch (error) {
-      console.error("Get cash error:", error);
-      res.status(500).json({ error: "Erro ao buscar transações" });
-    }
-  });
-
-  app.post("/api/cash", requireAuth, async (req, res) => {
-    try {
-      const transaction = await storage.createCashTransaction(req.body);
-      res.status(201).json(transaction);
-    } catch (error) {
-      console.error("Create cash error:", error);
-      res.status(500).json({ error: "Erro ao criar transação" });
-    }
-  });
-
-  app.patch("/api/cash/:id", requireAuth, async (req, res) => {
-    try {
-      const transaction = await storage.updateCashTransaction(req.params.id, req.body);
-      if (!transaction) return res.status(404).json({ error: "Transação não encontrada" });
-      res.json(transaction);
-    } catch (error) {
-      console.error("Update cash error:", error);
-      res.status(500).json({ error: "Erro ao atualizar transação" });
-    }
-  });
-
-  app.delete("/api/cash/:id", requireAuth, async (req, res) => {
-    try {
-      const transaction = await storage.getCashTransaction(req.params.id);
-      if (!transaction) return res.status(404).json({ error: "Transação não encontrada" });
-
-      if (transaction.receiptId) {
-        return res.status(400).json({ 
-          error: "Não é possível excluir manualmente uma transação vinculada a um recibo. Ela será excluída automaticamente se o pagamento do recibo for estornado." 
-        });
-      }
-
-      await storage.deleteCashTransaction(req.params.id);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Delete cash error:", error);
-      res.status(500).json({ error: "Erro ao excluir transação" });
-    }
-  });
-
-  app.get("/api/transfers", requireAuth, async (req, res) => {
-    try {
-      const transfers = await storage.getLandlordTransfers();
-      res.json(transfers);
-    } catch (error) {
-      console.error("Get transfers error:", error);
-      res.status(500).json({ error: "Erro ao buscar repasses" });
-    }
-  });
-
-  // --- Rotas NFS-e ---
-
-  app.get("/api/nfse/config", requireAuth, async (req, res) => {
-    try {
-      const config = await storage.getNfseConfig();
-      res.json(config || {});
-    } catch (error) {
-      console.error("Get NFS-e config error:", error);
-      res.status(500).json({ error: "Erro ao buscar configuração NFS-e" });
-    }
-  });
-
-  app.post("/api/nfse/config", requireAuth, async (req, res) => {
-    try {
-      const config = await storage.upsertNfseConfig(req.body);
-      res.json(config);
-    } catch (error) {
-      console.error("Upsert NFS-e config error:", error);
-      res.status(500).json({ error: "Erro ao salvar configuração NFS-e" });
-    }
-  });
-
-  app.get("/api/nfse/emissoes", requireAuth, async (req, res) => {
-    try {
-      const emissoes = await storage.getNfseEmissoes();
-      res.json(emissoes);
-    } catch (error) {
-      console.error("Get NFS-e emissoes error:", error);
-      res.status(500).json({ error: "Erro ao buscar emissões NFS-e" });
-    }
-  });
-
-  app.get("/api/nfse/emissoes/:id", requireAuth, async (req, res) => {
-    try {
-      const emissao = await storage.getNfseEmissao(req.params.id);
-      if (!emissao) return res.status(404).json({ error: "Emissão não encontrada" });
-      res.json(emissao);
-    } catch (error) {
-      console.error("Get NFS-e emissao error:", error);
-      res.status(500).json({ error: "Erro ao buscar emissão NFS-e" });
-    }
-  });
-
-  app.post("/api/nfse/lotes", requireAuth, async (req, res) => {
-    try {
-      const { itens } = req.body; // Array of items
-      if (!Array.isArray(itens) || itens.length === 0) {
-        return res.status(400).json({ error: "Lista de itens inválida ou vazia" });
-      }
-
-      const config = await storage.getNfseConfig();
-      if (!config) return res.status(400).json({ error: "NFS-e não configurada" });
-
-      const crypto = await import('crypto');
-      const loteItensToCreate: any[] = [];
-      let valorTotalLote = 0;
-
-      // 1. Validate and Prepare items
-      for (const item of itens) {
-         // Validação mais rigorosa
-         if (!item.origemId || !item.origemTipo || !item.valor || !item.tomadorCpfCnpj || !item.tomadorNome) {
-             console.error("Item inválido no lote (dados incompletos):", item);
-             continue;
-         }
-
-         const valorNum = Number(item.valor);
-         if (isNaN(valorNum)) {
-             console.error("Item com valor não numérico:", item);
-             continue;
-         }
-
-         const idempotencyKey = crypto.createHash('sha256')
-            .update(`${config.id}-${item.origemId}-${item.valor}-${new Date().getMonth()}-${item.origemTipo}-LOTE`)
-            .digest('hex');
-
-         // Check for duplicates
-         const existing = await storage.getNfseEmissaoByIdempotency(idempotencyKey);
-         if (existing && (existing.status === 'EMITIDA' || existing.status === 'ENVIANDO')) {
-            console.warn(`Skipping duplicate emission for ${item.origemId}`);
-            continue; 
-         }
-
-         valorTotalLote += valorNum;
-         const valorIssNum = valorNum * (Number(config.aliquotaIss) / 100);
-         
-         loteItensToCreate.push({
-            ...item,
-            idempotencyKey,
-            valorServico: valorNum.toFixed(2),
-            valorIss: valorIssNum.toFixed(2),
-            baseCalculo: valorNum.toFixed(2)
-         });
-      }
-
-      if (loteItensToCreate.length === 0) {
-        return res.status(400).json({ error: "Nenhum item válido para emitir (possíveis duplicatas ou dados inválidos)" });
-      }
-
-      // 2. Create Lote
-      console.log("Creating lote with status: CRIADO");
-      const lote = await storage.createNfseLote({
-        criadoPorUsuarioId: req.session.userId || null,
-        qtdItens: loteItensToCreate.length,
-        valorTotal: valorTotalLote.toFixed(2),
-        status: "CRIADO"
-      });
-
-      // 3. Create Emissions linked to Lote
-      const createdEmissions = [];
-      const errors = [];
-      
-      for (const item of loteItensToCreate) {
-        try {
-            // Check if emission already exists for this idempotency key
-            const existing = await storage.getNfseEmissaoByIdempotency(item.idempotencyKey);
-            
-            if (existing) {
-                if (existing.status === 'EMITIDA' || existing.status === 'ENVIANDO') {
-                    console.log(`Emissão ${existing.id} já processada. Ignorando.`);
-                    createdEmissions.push(existing);
-                    continue;
-                }
-                
-                // Reuse existing emission, update loteId and status
-                console.log(`Reusing existing emission ${existing.id} for new lote`);
-                const updated = await storage.updateNfseEmissao(existing.id, {
-                    loteId: lote.id,
-                    status: "PENDENTE",
-                    updatedAt: new Date()
-                });
-                if (updated) createdEmissions.push(updated);
-            } else {
-                // Create new
-                const emissao = await storage.createNfseEmissao({
-                  loteId: lote.id,
-                  status: "PENDENTE",
-                  idempotencyKey: item.idempotencyKey,
-                  valorServico: item.valorServico,
-                  valorIss: item.valorIss,
-                  aliquotaIss: config.aliquotaIss,
-                  baseCalculo: item.baseCalculo,
-                  descricaoServico: item.discriminacao || config.descricaoServicoPadrao,
-                  tomadorCpfCnpj: item.tomadorCpfCnpj,
-                  tomadorNome: item.tomadorNome,
-                  origemId: item.origemId,
-                  origemTipo: item.origemTipo
-                });
-                createdEmissions.push(emissao);
-            }
-        } catch (err) {
-            console.error("Erro ao criar emissão individual:", err, item);
-            errors.push({ item, error: err instanceof Error ? err.message : String(err) });
-        }
-      }
-
-      res.status(201).json({ lote, emissoes: createdEmissions, errors });
-    } catch (error) {
-      console.error("Create Batch NFS-e error:", error);
-      if (error instanceof Error) {
-          console.error("Stack trace:", error.stack);
-      }
-      res.status(500).json({ error: "Erro ao criar lote de NFS-e", details: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  app.post("/api/nfse/emitir", requireAuth, async (req, res) => {
-    try {
-      // Espera receber dados para criar a emissão. 
-      // Pode vir de um recibo (comissao) ou avulso.
-      // Exemplo payload: { origemId: '...', origemTipo: 'COMISSAO', valor: 100, ... }
-      
-      const { origemId, origemTipo, valor, tomadorNome, tomadorCpfCnpj, discriminacao } = req.body;
-
-      if (!origemId || !origemTipo || !valor) {
-        return res.status(400).json({ error: "Dados incompletos para emissão" });
-      }
-
-      // Idempotência
-      const config = await storage.getNfseConfig();
-      if (!config) return res.status(400).json({ error: "NFS-e não configurada" });
-
-      const crypto = await import('crypto');
-      const idempotencyKey = crypto.createHash('sha256')
-        .update(`${config.id}-${origemId}-${valor}-${new Date().getMonth()}-${origemTipo}`)
-        .digest('hex');
-
-      const existing = await storage.getNfseEmissaoByIdempotency(idempotencyKey);
-      if (existing) {
-         if (existing.status === 'EMITIDA' || existing.status === 'ENVIANDO') {
-           return res.status(409).json({ error: "Nota já emitida ou em processamento", emissao: existing });
-         }
-         // Se falhou ou pendente, pode tentar de novo (retorna a existente para reprocessar)
-         return res.json(existing);
-      }
-
-      // Criar Lote para esta emissão (requisito: um lote por clique/emissão ou agrupado)
-      console.log("Creating single lote with status: CRIADO");
-      const lote = await storage.createNfseLote({
-        criadoPorUsuarioId: req.session.userId || null,
-        qtdItens: 1,
-        valorTotal: Number(valor).toFixed(2),
-        status: "CRIADO"
-      });
-
-      // Criar nova emissão
-      const emissao = await storage.createNfseEmissao({
-        loteId: lote.id,
-        status: "PENDENTE",
-        idempotencyKey,
-        valorServico: Number(valor).toFixed(2),
-        valorIss: (Number(valor) * (Number(config.aliquotaIss) / 100)).toFixed(2),
-        aliquotaIss: config.aliquotaIss,
-        baseCalculo: Number(valor).toFixed(2),
-        descricaoServico: discriminacao || config.descricaoServicoPadrao,
-        tomadorCpfCnpj: tomadorCpfCnpj, 
-        tomadorNome: tomadorNome,
-        origemId,
-        origemTipo
-      });
-
-      res.status(201).json(emissao);
-    } catch (error) {
-      console.error("Emitir NFS-e error:", error);
-      res.status(500).json({ error: "Erro ao criar emissão NFS-e", details: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  app.get("/api/nfse/lotes/:id", requireAuth, async (req, res) => {
-    try {
-      const loteId = req.params.id as string;
-      const lote = await storage.getNfseLote(loteId);
-      if (!lote) return res.status(404).json({ error: "Lote não encontrado" });
-      
-      const emissoes = await storage.getNfseEmissoesByLote(lote.id);
-      res.json({ lote, emissoes });
-    } catch (error) {
-      console.error("Get Lote NFS-e error:", error);
-      res.status(500).json({ error: "Erro ao buscar lote NFS-e" });
-    }
-  });
-
-  app.get("/api/nfse/emissoes/:id", requireAuth, async (req, res) => {
-    try {
-      const emissaoId = req.params.id as string;
-      const emissao = await storage.getNfseEmissao(emissaoId);
-      if (!emissao) return res.status(404).json({ error: "Emissão não encontrada" });
-      res.json(emissao);
-    } catch (error) {
-      console.error("Get Emissão NFS-e error:", error);
-      res.status(500).json({ error: "Erro ao buscar emissão NFS-e" });
-    }
-  });
-
-
-
-  app.post("/api/nfse/lotes/:id/processar", requireAuth, async (req, res) => {
-    try {
-      const loteId = req.params.id as string;
-      const lote = await storage.getNfseLote(loteId);
-      if (!lote) return res.status(404).json({ error: "Lote não encontrado" });
-      
-      const emissoes = await storage.getNfseEmissoesByLote(lote.id);
-      const results = [];
-
-      for (const emissao of emissoes) {
-        if (emissao.status === "PENDENTE" || emissao.status === "FALHOU") {
-          const result = await nfseProvider.emitirNfse(emissao.id);
-          results.push({ id: emissao.id, result });
-        }
-      }
-
-      res.json({ message: "Processamento iniciado", results });
-    } catch (error) {
-      console.error("Processar Lote NFS-e error:", error);
-      res.status(500).json({ error: "Erro ao processar lote NFS-e" });
-    }
-  });
-
-  app.post("/api/nfse/emissoes/:id/processar", requireAuth, async (req, res) => {
-    try {
-      const emissaoId = req.params.id as string;
-      const result = await nfseProvider.emitirNfse(emissaoId);
-      if (result.success) {
-        res.json(result);
-      } else {
-        res.status(400).json(result);
-      }
-    } catch (error: any) {
-      console.error("Processar NFS-e error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/nfse/emissoes/:id/cancelar", requireAuth, async (req, res) => {
-    try {
-      const { motivo } = req.body;
-      if (!motivo) return res.status(400).json({ error: "Motivo é obrigatório" });
-
-      const emissaoId = req.params.id as string;
-      const result = await nfseProvider.cancelarNfse(emissaoId, motivo);
-      if (result.success) {
-        res.json(result);
-      } else {
-        res.status(400).json(result);
-      }
-    } catch (error: any) {
-      console.error("Cancelar NFS-e error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.get("/api/nfse/danfse/:chave", requireAuth, async (req, res) => {
-    try {
-      await nfseProvider.initialize();
-      const url = nfseProvider.getDanfseUrl(req.params.chave);
-      res.redirect(url);
-    } catch (error: any) {
-      console.error("Erro ao redirecionar DANFSe:", error);
-      res.status(500).send("Erro ao gerar link do DANFSe");
-    }
-  });
-
-  app.get("/api/nfse/emissoes/:id/xml", requireAuth, async (req, res) => {
-    try {
-      const xml = await nfseProvider.baixarXml(req.params.id);
-      if (!xml) return res.status(404).json({ error: "XML não encontrado" });
-      
-      res.header("Content-Type", "application/xml");
-      res.header("Content-Disposition", `attachment; filename=nfse-${req.params.id}.xml`);
-      res.send(xml);
-    } catch (error: any) {
-      console.error("Download XML error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/transfers/:id/execute", requireAuth, async (req, res) => {
-    try {
-      const transfer = await storage.getLandlordTransfer(req.params.id);
-      if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
-      if (transfer.status !== "pending") return res.status(400).json({ error: "Repasse não está pendente" });
-
-      const landlord = await storage.getLandlord(transfer.landlordId);
-      if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
-
-      const receipt = await storage.getReceipt(transfer.receiptId);
-
-      const result = await pixProvider.createTransfer(
-        landlord.pixKey || "",
-        landlord.name,
-        Number(transfer.amount),
-        `Repasse aluguel ${receipt?.refMonth}/${receipt?.refYear}`
-      );
-
-      if (result.success) {
-        await storage.updateLandlordTransfer(transfer.id, {
-          status: "paid",
-          paidAt: new Date(),
-          providerTransferId: result.transferId,
-        });
-
-        if (receipt) {
-          await storage.updateReceipt(receipt.id, { status: "transferred" });
-        }
-
-        await storage.createCashTransaction({
-          type: "OUT",
-          date: new Date().toISOString().split("T")[0],
-          category: "Repasse ao Proprietário",
-          description: `Repasse PIX para ${landlord.name}`,
-          amount: transfer.amount,
-          receiptId: transfer.receiptId,
-        });
-
-        res.json({ success: true, transferId: result.transferId });
-      } else {
-        await storage.updateLandlordTransfer(transfer.id, {
-          status: "failed",
-          errorMessage: result.error,
-        });
-        res.status(400).json({ error: result.error });
-      }
-    } catch (error) {
-      console.error("Execute transfer error:", error);
-      res.status(500).json({ error: "Erro ao executar repasse" });
-    }
-  });
-
-  app.post("/api/transfers/:id/manual", requireAuth, async (req, res) => {
-    try {
-      const transfer = await storage.getLandlordTransfer(req.params.id);
-      if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
-      if (transfer.status !== "pending") return res.status(400).json({ error: "Repasse não está pendente" });
-
-      const landlord = await storage.getLandlord(transfer.landlordId);
-      if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
-
-      const receipt = await storage.getReceipt(transfer.receiptId);
-
-      // Atualiza status do repasse
-      await storage.updateLandlordTransfer(transfer.id, {
-        status: "paid",
-        paidAt: new Date(),
-        providerTransferId: "MANUAL-" + Date.now(), // ID fictício para controle
-      });
-
-      // Atualiza status do recibo
-      if (receipt) {
-        await storage.updateReceipt(receipt.id, { status: "transferred" });
-      }
-
-      // Cria lançamento no caixa
-      await storage.createCashTransaction({
-        type: "OUT",
-        date: new Date().toISOString().split("T")[0],
-        category: "Repasse ao Proprietário",
-        description: `Repasse Manual para ${landlord.name}`,
-        amount: transfer.amount,
-        receiptId: transfer.receiptId,
-      });
-
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Manual transfer error:", error);
-      res.status(500).json({ error: "Erro ao registrar repasse manual" });
-    }
-  });
-
-  app.post("/api/transfers/:id/reverse", requireAuth, async (req, res) => {
-    try {
-      const transfer = await storage.getLandlordTransfer(req.params.id);
-      if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
-      if (transfer.status !== "paid") return res.status(400).json({ error: "Apenas repasses pagos podem ser estornados" });
-
-      const landlord = await storage.getLandlord(transfer.landlordId);
-      const receipt = await storage.getReceipt(transfer.receiptId);
-
-      // 1. Reverte status do repasse para pendente (para permitir novo pagamento ou exclusão)
-      await storage.updateLandlordTransfer(transfer.id, {
-        status: "pending",
-      });
-
-      // 2. Reverte status do recibo para pago (se existir)
-      if (receipt) {
-        await storage.updateReceipt(receipt.id, { status: "paid" });
-        
-        // 3. Remove o lançamento do caixa (OUT) vinculado ao recibo
-        await storage.deleteCashTransactionByReceiptAndType(receipt.id, "OUT");
-      }
-
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Reverse transfer error:", error);
-      res.status(500).json({ error: "Erro ao estornar repasse" });
-    }
-  });
-
-  app.delete("/api/transfers/:id", requireAuth, async (req, res) => {
-    try {
-      const transfer = await storage.getLandlordTransfer(req.params.id);
-      if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
-
-      if (transfer.status !== "pending" && transfer.status !== "failed") {
-        return res.status(400).json({ 
-          error: "Apenas repasses pendentes ou com falha podem ser excluídos." 
-        });
-      }
-
-      // Salva o ID do recibo antes de excluir
-      const receiptId = transfer.receiptId;
-
-      await storage.deleteLandlordTransfer(req.params.id);
-
-      // Garante que o recibo volte para o status 'paid' se estiver 'transferred' (embora deva estar 'paid' se o repasse não foi concluído)
-      // Isso permite que um novo repasse seja gerado para este recibo
-      if (receiptId) {
-        const receipt = await storage.getReceipt(receiptId);
-        if (receipt && receipt.status === "transferred") {
-           await storage.updateReceipt(receiptId, { status: "paid" });
-        }
-      }
-
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("Delete transfer error:", error);
-      res.status(500).json({ error: "Erro ao excluir repasse" });
+      res.status(500).json({ error: "Erro ao gerar Nota Fiscal" });
     }
   });
 
@@ -1393,100 +1746,67 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/invoices/:id/issue", requireAuth, async (req, res) => {
+  app.post("/api/invoices/:id/send-email", requireAuth, async (req, res) => {
     try {
-      const invoice = await storage.getInvoice(req.params.id);
-      if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
-      if (invoice.status !== "draft") return res.status(400).json({ error: "Nota fiscal não está em rascunho" });
-
-      const landlord = await storage.getLandlord(invoice.landlordId);
-      if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
-
-      const receipt = await storage.getReceipt(invoice.receiptId);
-
-      const result = await nfProvider.emitInvoice(
-        landlord.name,
-        landlord.doc,
-        Number(invoice.amount),
-        `Aluguel ${receipt?.refMonth}/${receipt?.refYear}`
-      );
-
+      const result = await emailService.sendInvoiceEmail(req.params.id);
       if (result.success) {
-        await storage.updateInvoice(invoice.id, {
-          status: "issued",
-          providerInvoiceId: result.invoiceId,
-          number: result.invoiceNumber,
-        });
-        await storage.updateReceipt(invoice.receiptId, { isInvoiceIssued: true });
-        res.json({ success: true, invoiceNumber: result.invoiceNumber });
+        res.json(result);
       } else {
-        await storage.updateInvoice(invoice.id, {
-          status: "error",
-          errorMessage: result.error,
-        });
-        res.status(400).json({ error: result.error });
+        res.status(400).json({ error: result.message });
       }
-    } catch (error) {
-      console.error("Issue invoice error:", error);
-      res.status(500).json({ error: "Erro ao emitir nota fiscal" });
+    } catch (error: any) {
+      console.error("Send email error:", error);
+      res.status(500).json({ error: "Erro ao enviar email" });
     }
   });
 
-  app.post("/api/invoices/:id/cancel", requireAuth, async (req, res) => {
+  app.post("/api/invoices/batch-delete", requireAuth, async (req, res) => {
     try {
-      const invoice = await storage.getInvoice(req.params.id);
-      if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
-      if (invoice.status !== "issued") return res.status(400).json({ error: "Apenas notas fiscais emitidas podem ser canceladas" });
-
-      const result = await nfProvider.cancelInvoice(invoice.id, "Cancelamento solicitado pelo usuário");
-
-      if (result.success) {
-        await storage.updateInvoice(invoice.id, {
-          status: "cancelled",
-        });
-
-        // Update receipt status to allow re-generation
-        await storage.updateReceipt(invoice.receiptId, {
-          isInvoiceIssued: false,
-          isInvoiceGenerated: false,
-          isInvoiceCancelled: true
-        });
-
-        res.json({ success: true });
-      } else {
-        res.status(400).json({ error: result.error || "Erro ao cancelar nota fiscal" });
-      }
-    } catch (error) {
-      console.error("Cancel invoice error:", error);
-      res.status(500).json({ error: "Erro ao cancelar nota fiscal" });
-    }
-  });
-
-  app.get("/api/invoices/:id/xml", requireAuth, async (req, res) => {
-    try {
-      const invoice = await storage.getInvoice(req.params.id);
-      if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
-      
-      if (invoice.status !== "issued") {
-        return res.status(400).json({ error: "XML disponível apenas para notas emitidas" });
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "IDs não fornecidos" });
       }
 
-      const landlord = await storage.getLandlord(invoice.landlordId);
-      if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
+      // 1. Validate all invoices exist and are not EMITIDA
+      const invoicesToDelete = [];
+      const receiptIdsToCheck = new Set<string>();
 
-      const xmlContent = await nfProvider.generateXml(invoice.id, {
-        number: invoice.number,
-        amount: invoice.amount,
-        customerName: landlord.name,
-        customerDoc: landlord.doc
-      });
+      for (const id of ids) {
+        const invoice = await storage.getInvoice(id);
+        if (!invoice) continue; // Or throw error? Skip for now.
+        
+        if (invoice.status === "EMITIDA") {
+           // If one is emitted, fail the whole batch or just skip? 
+           // Safer to fail to let user know.
+           return res.status(400).json({ error: `A nota fiscal ${invoice.number || id} já foi emitida e não pode ser excluída.` });
+        }
+        invoicesToDelete.push(invoice);
+        if (invoice.receiptId) receiptIdsToCheck.add(invoice.receiptId);
+      }
 
-      res.setHeader('Content-Type', 'application/xml');
-      res.setHeader('Content-Disposition', `attachment; filename=nf-${invoice.number || invoice.id}.xml`);
-      res.send(xmlContent);
+      // 2. Delete
+      for (const invoice of invoicesToDelete) {
+        await storage.deleteInvoice(invoice.id);
+      }
+
+      // 3. Update Receipts status
+      for (const receiptId of receiptIdsToCheck) {
+        const remainingInvoices = await storage.getInvoicesByReceiptId(receiptId);
+        if (remainingInvoices.length === 0) {
+           const receipt = await storage.getReceipt(receiptId);
+           if (receipt && receipt.status !== "paid" && receipt.status !== "transferred") {
+              const newStatus = (receipt.boletoStatus === "ISSUED") ? "BOLETO_EMITIDO" : "closed";
+              await storage.updateReceipt(receiptId, { isInvoiceGenerated: false, status: newStatus });
+           } else {
+              await storage.updateReceipt(receiptId, { isInvoiceGenerated: false });
+           }
+        }
+      }
+
+      res.json({ success: true, count: invoicesToDelete.length });
     } catch (error) {
-      console.error("Get invoice XML error:", error);
-      res.status(500).json({ error: "Erro ao gerar XML da nota fiscal" });
+      console.error("Batch delete invoices error:", error);
+      res.status(500).json({ error: "Erro ao excluir notas fiscais em lote" });
     }
   });
 
@@ -1495,19 +1815,25 @@ export async function registerRoutes(
       const invoice = await storage.getInvoice(req.params.id);
       if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
 
-      if (["issued", "cancelled"].includes(invoice.status)) {
-        return res.status(400).json({ error: "Não é possível excluir uma nota fiscal emitida ou cancelada." });
+      if (invoice.status === "EMITIDA") {
+        return res.status(400).json({ error: "Não é possível excluir uma nota fiscal emitida" });
       }
 
-      // Delete the invoice
       await storage.deleteInvoice(req.params.id);
-
-      // Revert receipt status
-      await storage.updateReceipt(invoice.receiptId, { 
-        isInvoiceGenerated: false, 
-        isInvoiceIssued: false,
-        isInvoiceCancelled: false 
-      });
+      
+      // Update receipt status
+      // Check if there are any other invoices for this receipt
+      const remainingInvoices = await storage.getInvoicesByReceiptId(invoice.receiptId);
+      if (remainingInvoices.length === 0) {
+        // First check if it was paid, if so, keep it paid but isInvoiceGenerated=false
+        const receipt = await storage.getReceipt(invoice.receiptId);
+        if (receipt && receipt.status !== "paid" && receipt.status !== "transferred") {
+           const newStatus = (receipt.boletoStatus === "ISSUED") ? "BOLETO_EMITIDO" : "closed";
+           await storage.updateReceipt(invoice.receiptId, { isInvoiceGenerated: false, status: newStatus });
+        } else {
+           await storage.updateReceipt(invoice.receiptId, { isInvoiceGenerated: false });
+        }
+      }
 
       res.json({ success: true });
     } catch (error) {
@@ -1516,16 +1842,657 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/nfse/emissoes/:id/pdf", requireAuth, async (req, res) => {
+  // Boleto Invoice Routes
+  app.post("/api/invoices/:id/boleto", requireAuth, async (req, res) => {
     try {
-      const emissaoId = req.params.id as string;
-      const emissao = await storage.getNfseEmissao(emissaoId);
-      if (!emissao || !emissao.pdfUrl) return res.status(404).json({ error: "PDF não disponível" });
+      const invoiceId = req.params.id;
+      const invoice = await storage.getInvoice(invoiceId);
+      if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
+
+      const receipt = await storage.getReceipt(invoice.receiptId);
+      if (!receipt) return res.status(404).json({ error: "Recibo vinculado não encontrado" });
+
+      // 1. Determine Company and Payer
+      let companyId = invoice.companyId;
+      let payer: any = null;
+      let payerType: "FISICA" | "JURIDICA" = "JURIDICA";
+      let systemName: string | undefined;
+
+      // Se invoice não tem companyId, tenta pegar do receipt
+      if (!companyId) {
+          if (receipt.projectId) {
+            const p = await storage.getProject(receipt.projectId);
+            companyId = p?.companyId;
+          } else if (receipt.contractId) {
+            const c = await storage.getContract(receipt.contractId);
+            companyId = c?.companyId;
+          } else if (receipt.systemContractId) {
+            const sc = await storage.getSystemContract(receipt.systemContractId);
+            companyId = sc?.companyId;
+            systemName = sc?.systemName;
+          }
+      }
+
+      if (!companyId) return res.status(400).json({ error: "Empresa não identificada para emissão do boleto" });
+
+      // Determinar Pagador (Tomador)
+      if (invoice.clientId) {
+          payer = await storage.getClient(invoice.clientId);
+      } else {
+          // Fallback para lógica do receipt
+          if (receipt.projectId) {
+              const p = await storage.getProject(receipt.projectId);
+              if (p?.clientType === 'partner' && p.partnerId) {
+                  payer = await storage.getPartner(p.partnerId);
+              } else if (p?.clientId) {
+                  payer = await storage.getClient(p.clientId);
+              }
+          } else if (receipt.contractId) {
+              const c = await storage.getContract(receipt.contractId);
+              if (c?.clientId) payer = await storage.getClient(c.clientId);
+          } else if (receipt.systemContractId) {
+              const sc = await storage.getSystemContract(receipt.systemContractId);
+              if (sc?.clientId) payer = await storage.getClient(sc.clientId);
+          }
+      }
+
+      if (!payer) {
+          return res.status(400).json({ error: "Pagador (Cliente/Parceiro) não encontrado" });
+      }
+
+      // 2. Get Company Config
+      const company = await storage.getCompany(companyId);
+      if (!company || !company.interClientId || !company.interClientSecret || !company.interCertPath) {
+          return res.status(400).json({ error: "Configuração do Boleto Inter incompleta para esta empresa" });
+      }
+
+      const cleanDigits = (s: string) => s.replace(/\D/g, "");
+      const payerDoc = cleanDigits(payer.doc || payer.cnpj || "");
+      payerType = payerDoc.length > 11 ? "JURIDICA" : "FISICA";
+
+      // 3. Prepare Boleto Data
+      const amount = invoice.amount ? Number(invoice.amount) : Number(receipt.totalDue);
+
+      // Get NFSe info first to use in message
+      const nfseEmissao = await storage.getNfseEmissaoByInvoiceId(invoice.id);
+      const nfseNumber = nfseEmissao?.numero ? nfseEmissao.numero.replace(/\D/g, '') : (invoice.number || "Processando");
+
+      const boletoData: any = {
+        seuNumero: invoice.id.substring(0, 15),
+        valorNominal: amount,
+        numDiasAgenda: 30,
+        pagador: {
+          cpfCnpj: payerDoc,
+          tipoPessoa: payerType,
+          nome: payer.name.substring(0, 100),
+          endereco: payer.street?.substring(0, 90) || payer.address?.substring(0, 90) || "Endereço não informado",
+          numero: payer.number || "S/N",
+          complemento: payer.complement || "",
+          bairro: payer.neighborhood || "Centro",
+          cidade: payer.city || "Cidade",
+          uf: payer.state || "MG",
+          cep: cleanDigits(payer.zipCode || "00000000"),
+          email: payer.email || "",
+          ddd: payer.phone ? cleanDigits(payer.phone).substring(0, 2) : "",
+          telefone: payer.phone ? cleanDigits(payer.phone).substring(2) : ""
+        },
+        multa: { taxa: 2, codigo: "PERCENTUAL" },
+        mora: { taxa: 1, codigo: "TAXAMENSAL" },
+        mensagem: {
+          linha1: (systemName === 'SimpleDFe' || systemName === 'SimpleDFE') 
+              ? "Mensalidade Sistema de Captura de NFe/ NFSe / CTe - SimpleDFe" 
+              : (() => {
+                  // Lógica para mês anterior (Aplicada a TODOS os tipos: Contratos, Sistemas, Projetos, etc)
+                  // Subtrair 1 mês do mês de referência
+                  // Ex: refMonth = 3 (Março), refYear = 2026 -> Anterior = Fevereiro/2026
+                  let prevMonth = receipt.refMonth - 1;
+                  let prevYear = receipt.refYear;
+                  
+                  if (prevMonth === 0) {
+                     prevMonth = 11; // Dezembro (índice 11)
+                     prevYear--;
+                  } else {
+                     prevMonth--; // Ajustar para índice 0-11
+                  }
+
+                  const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+                  const monthName = monthNames[prevMonth];
+                  
+                  return `Referente a Serviços Prestados no mês de ${monthName}/${prevYear}`;
+              })(),
+          linha2: `Nota Fiscal Número ${nfseNumber}`,
+          linha3: "",
+          linha4: "",
+          linha5: ""
+        },
+        beneficiarioFinal: {
+          cpfCnpj: cleanDigits(company.doc),
+          tipoPessoa: cleanDigits(company.doc).length > 11 ? "JURIDICA" : "FISICA",
+          nome: company.name,
+          endereco: company.address || "Endereço da Empresa",
+          numero: "S/N",
+          complemento: "",
+          bairro: "Centro",
+          cidade: company.city || "Cidade",
+          uf: company.state || "UF",
+          cep: cleanDigits(company.zipCode || "00000000")
+        },
+        formasRecebimento: ["BOLETO", "PIX"]
+      };
+
+      // Calculate Due Date
+      let dayDue = 10;
+      if (receipt.projectId) {
+        const p = await storage.getProject(receipt.projectId);
+        if ((p as any).dayDue) dayDue = (p as any).dayDue;
+      } else if (receipt.contractId) {
+        const c = await storage.getContract(receipt.contractId);
+        if (c?.dayDue) dayDue = c.dayDue;
+      } else if (receipt.systemContractId) {
+        const sc = await storage.getSystemContract(receipt.systemContractId);
+        if (sc?.dayDue) dayDue = sc.dayDue;
+      }
       
-      res.redirect(emissao.pdfUrl);
+      const year = receipt.refYear;
+      const monthIndex = receipt.refMonth - 1; 
+      const dueDate = new Date(year, monthIndex, dayDue);
+      boletoData.dataVencimento = dueDate.toISOString().split('T')[0];
+
+      // Add Nota Fiscal Info if available
+      if (nfseEmissao && nfseEmissao.chaveAcesso && nfseEmissao.numero) {
+           const cleanKey = nfseEmissao.chaveAcesso.replace(/\D/g, '');
+           if (cleanKey.length === 44) {
+               const nfseConfig = await storage.getNfseConfig(companyId);
+               boletoData.notaFiscal = {
+                 chaveNFe: cleanKey,
+                 numero: parseInt(nfseEmissao.numero.replace(/\D/g, '')) || 0,
+                 serie: nfseConfig?.serieNfse ? parseInt(nfseConfig.serieNfse.replace(/\D/g, '')) : 900,
+                 dataEmissao: nfseEmissao.createdAt.toISOString().split('T')[0],
+                 parcela: 1,
+                 naturezaOperacao: "Venda" 
+               };
+           }
+      }
+
+      const inter = new InterProvider({
+        environment: company.interEnvironment || "sandbox",
+        clientId: company.interClientId,
+        clientSecret: company.interClientSecret,
+        certPath: company.interCertPath,
+        keyPath: company.interKeyPath || undefined
+      });
+
+      const result = await inter.issueBoleto(boletoData);
+
+      await storage.updateInvoice(invoice.id, {
+        boletoSolicitacaoId: result.codigoSolicitacao,
+        boletoStatus: "ISSUED"
+      });
+
+      res.json({ success: true, codigoSolicitacao: result.codigoSolicitacao });
+
+    } catch (error: any) {
+      console.error("Erro ao emitir boleto da invoice:", error);
+      res.status(500).json({ error: error.message || "Erro ao emitir boleto" });
+    }
+  });
+
+  app.get("/api/invoices/:id/boleto/pdf", requireAuth, async (req, res) => {
+    try {
+      const invoiceId = req.params.id;
+      const invoice = await storage.getInvoice(invoiceId);
+      if (!invoice || !invoice.boletoSolicitacaoId) {
+        return res.status(404).json({ error: "Boleto não encontrado para esta nota fiscal" });
+      }
+
+      let companyId = invoice.companyId;
+      if (!companyId) {
+          const receipt = await storage.getReceipt(invoice.receiptId);
+          if (receipt) {
+              if (receipt.projectId) {
+                const p = await storage.getProject(receipt.projectId);
+                companyId = p?.companyId;
+              } else if (receipt.contractId) {
+                const c = await storage.getContract(receipt.contractId);
+                companyId = c?.companyId;
+              } else if (receipt.systemContractId) {
+                const sc = await storage.getSystemContract(receipt.systemContractId);
+                companyId = sc?.companyId;
+              }
+          }
+      }
+
+      if (!companyId) return res.status(404).json({ error: "Empresa não encontrada" });
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Empresa não encontrada" });
+
+      const inter = new InterProvider({
+        environment: company.interEnvironment || "sandbox",
+        clientId: company.interClientId!, 
+        clientSecret: company.interClientSecret!,
+        certPath: company.interCertPath!,
+        keyPath: company.interKeyPath || undefined
+      });
+
+      const pdfBase64 = await inter.getPdf(invoice.boletoSolicitacaoId);
+      const pdfBuffer = Buffer.from(pdfBase64, 'base64');
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename=boleto-${invoice.boletoSolicitacaoId}.pdf`);
+      res.send(pdfBuffer);
+
+    } catch (error: any) {
+      console.error("Erro ao obter PDF do boleto:", error);
+      res.status(500).json({ error: "Erro ao obter PDF" });
+    }
+  });
+
+  app.post("/api/invoices/:id/boleto/cancel", requireAuth, async (req, res) => {
+    try {
+      const invoiceId = req.params.id;
+      const invoice = await storage.getInvoice(invoiceId);
+      if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
+
+      if (invoice.boletoStatus !== 'ISSUED') {
+         return res.status(400).json({ error: "Esta nota fiscal não possui boleto emitido para cancelar." });
+      }
+
+      await storage.updateInvoice(invoiceId, {
+        boletoStatus: 'CANCELLED'
+      });
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Erro ao cancelar boleto:", error);
+      res.status(500).json({ error: "Erro ao cancelar boleto" });
+    }
+  });
+
+  // NFS-e Config (Tatuí)
+  app.post("/api/nfse/config", requireAuth, upload.single('certificado'), async (req, res) => {
+    try {
+      const data = req.body;
+
+      // Se houve upload de arquivo, converter para Base64
+      if (req.file) {
+        data.certificado = req.file.buffer.toString('base64');
+      }
+
+      // Converter campos numéricos/booleanos que podem vir como string do FormData
+      if (data.ultimoNumeroNfse) data.ultimoNumeroNfse = Number(data.ultimoNumeroNfse);
+      
+      // Tratar decimal (aliquotaIss)
+      if (data.aliquotaIss === "") {
+        data.aliquotaIss = null;
+      }
+
+      if (data.issRetido === "true") data.issRetido = true;
+      if (data.issRetido === "false") data.issRetido = false;
+      
+      // Tratar companyId vazio como undefined para não violar constraint ou lógica de busca
+      if (data.companyId === "") delete data.companyId;
+
+      const logData = { ...data };
+      if (logData.certificado && logData.certificado.length > 100) {
+        logData.certificado = logData.certificado.substring(0, 20) + "...(truncated)";
+      }
+      console.log("Upserting NFSe config:", logData); // Debug logging
+
+      const config = await storage.upsertNfseConfig(data);
+      res.json(config);
     } catch (error) {
-      console.error("Download PDF NFS-e error:", error);
-      res.status(500).json({ error: "Erro ao baixar PDF" });
+      console.error("Upsert NFSe config error:", error);
+      res.status(500).json({ error: "Erro ao salvar configuração NFS-e" });
+    }
+  });
+
+  app.get("/api/nfse/config", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const config = await storage.getNfseConfig(companyId);
+      res.json(config || {});
+    } catch (error) {
+      console.error("Get NFSe config error:", error);
+      res.status(500).json({ error: "Erro ao buscar configuração NFS-e" });
+    }
+  });
+
+  // NFS-e Operations
+  app.get("/api/nfse/emissoes", requireAuth, async (req, res) => {
+    try {
+      const emissoes = await storage.getNfseEmissoes();
+      res.json(emissoes);
+    } catch (error) {
+      console.error("Get NFSe emissoes error:", error);
+      res.status(500).json({ error: "Erro ao buscar emissões NFS-e" });
+    }
+  });
+
+  // Create NFS-e Lote (Batch)
+  app.post("/api/nfse/lotes", requireAuth, async (req, res) => {
+    try {
+      const { itens } = req.body;
+      
+      if (!Array.isArray(itens) || itens.length === 0) {
+        return res.status(400).json({ error: "Lista de itens inválida" });
+      }
+
+      // 1. Create Lote
+      const lote = await storage.createNfseLote({
+         status: "PROCESSANDO"
+      });
+
+      const emissoes = [];
+
+      // 2. Create Emissions
+      for (const item of itens) {
+         // Sanitizar valores decimais se necessário
+         if (item.valor) item.valor = String(item.valor);
+         
+         const emissao = await storage.createNfseEmissao({
+            ...item,
+            loteId: lote.id,
+            status: "PENDENTE"
+         });
+         emissoes.push(emissao);
+      }
+      
+      res.status(201).json({ lote, emissoes });
+    } catch (error) {
+      console.error("Create NFSe lote error:", error);
+      res.status(500).json({ error: "Erro ao criar lote de NFS-e" });
+    }
+  });
+
+  // Process specific NFS-e emission
+  app.post("/api/nfse/emissoes/:id/processar", requireAuth, async (req, res) => {
+      try {
+          const result = await nfseProvider.emitirNfse(req.params.id);
+          if (result.success) {
+              res.json(result);
+          } else {
+              res.status(400).json(result);
+          }
+      } catch (error: any) {
+          console.error("Process NFSe emission error:", error);
+          res.status(500).json({ error: error.message });
+      }
+  });
+
+  app.post("/api/nfse/emissoes/:id/cancelar", requireAuth, async (req, res) => {
+      try {
+          const { motivo } = req.body;
+          const result = await nfseProvider.cancelarNfse(req.params.id, motivo);
+          if (result.success) {
+              res.json(result);
+          } else {
+              res.status(400).json(result);
+          }
+      } catch (error: any) {
+          res.status(500).json({ error: error.message });
+      }
+  });
+
+  // Rota para correção manual de status (Emergency/Fix)
+  app.patch("/api/nfse/emissoes/:id", requireAuth, async (req, res) => {
+      try {
+          console.log(`[PATCH /api/nfse/emissoes/${req.params.id}] Payload recebido:`, req.body);
+          const { status, chaveAcesso, numeroNfse, erroMensagem } = req.body;
+          const updateData: any = {};
+          
+          // Allow manual override of status and key
+          if (status) updateData.status = status;
+          
+          // Chave de acesso e numeroNfse devem ser atualizados mesmo se forem string vazia (para limpar se necessário)
+          // Mas normalmente queremos setar um valor. O problema é se vier undefined.
+          // Se vier null ou "", assumimos que é para limpar ou setar vazio.
+          if (chaveAcesso !== undefined) updateData.chaveAcesso = chaveAcesso;
+          if (numeroNfse !== undefined) updateData.numero = numeroNfse;
+          
+          if (erroMensagem !== undefined) updateData.erroMensagem = erroMensagem;
+          
+          updateData.updatedAt = new Date();
+
+          console.log(`[PATCH /api/nfse/emissoes/${req.params.id}] Dados para update:`, updateData);
+
+          const emissao = await storage.updateNfseEmissao(req.params.id, updateData);
+          
+          // Sincronizar status da Invoice se necessário
+          if (emissao && emissao.origemTipo === 'INVOICE') {
+             if (status === 'EMITIDA') {
+                 // Se tem chave e numero, garante que a invoice também receba (opcional, mas bom pra consistência visual)
+                 await storage.updateInvoice(emissao.origemId, { status: "EMITIDA", number: numeroNfse || undefined });
+             } else if (status === 'CANCELADA') {
+                 await storage.updateInvoice(emissao.origemId, { status: "CANCELADA" });
+             }
+          }
+          
+          res.json(emissao);
+      } catch (error: any) {
+          console.error("Manual update NFSe error:", error);
+          res.status(500).json({ error: error.message });
+      }
+  });
+
+  app.get("/api/nfse/emissoes/:id/xml", requireAuth, async (req, res) => {
+      try {
+          const xml = await nfseProvider.downloadXml(req.params.id);
+          if (xml) {
+              res.header('Content-Type', 'application/xml');
+              res.send(xml);
+          } else {
+              res.status(404).json({ error: "XML não encontrado" });
+          }
+      } catch (error: any) {
+          res.status(500).json({ error: error.message });
+      }
+  });
+
+  app.get("/api/nfse/emissoes/:id/danfse", requireAuth, async (req, res) => {
+      try {
+          const emissao = await storage.getNfseEmissao(req.params.id);
+          if (emissao && emissao.chaveAcesso) {
+             let companyId: string | undefined;
+             if (emissao.origemTipo === 'INVOICE') {
+                const invoice = await storage.getInvoice(emissao.origemId);
+                if (invoice) companyId = invoice.companyId;
+             }
+             const config = await storage.getNfseConfig(companyId);
+             const url = nfseProvider.getDanfseUrl(emissao.chaveAcesso, config?.ambiente || 'homologacao');
+             res.json({ url });
+          } else {
+             res.status(404).json({ error: "Chave de acesso não disponível" });
+          }
+      } catch (error: any) {
+          res.status(500).json({ error: error.message });
+      }
+  });
+
+  app.get("/api/nfse/emissoes/:id/danfse/proxy", requireAuth, async (req, res) => {
+      let url = '';
+      try {
+          const emissao = await storage.getNfseEmissao(req.params.id);
+          if (!emissao || !emissao.chaveAcesso) {
+             return res.status(404).json({ error: "Nota fiscal ou chave de acesso não encontrada" });
+          }
+
+          let companyId: string | undefined;
+          if (emissao.origemTipo === 'INVOICE') {
+            const invoice = await storage.getInvoice(emissao.origemId);
+            if (invoice) companyId = invoice.companyId;
+          }
+          const config = await storage.getNfseConfig(companyId);
+          url = nfseProvider.getDanfseUrl(emissao.chaveAcesso, config?.ambiente || 'homologacao');
+
+          console.log(`Proxying DANFSe from: ${url}`);
+
+          const agent = await nfseProvider.getHttpsAgent(companyId);
+
+          // 1. Baixar PDF direto da URL oficial (ADN)
+          try {
+              const buffer = await nfseProvider.getDanfsePdf(emissao.chaveAcesso, companyId);
+              
+              console.log(`[Proxy] Sucesso ao baixar PDF da URL oficial.`);
+              res.setHeader('Content-Type', 'application/pdf');
+              res.setHeader('Content-Length', buffer.length);
+              // inline = visualizar no navegador, attachment = forçar download
+              const disposition = req.query.download === 'true' ? 'attachment' : 'inline';
+              res.setHeader('Content-Disposition', `${disposition}; filename=danfse-${emissao.chaveAcesso}.pdf`);
+              return res.send(buffer);
+          } catch (error: any) {
+              console.error(`[Proxy] Erro ao baixar PDF da URL oficial: ${error.message}`);
+              throw error;
+          }
+
+      } catch (error: any) {
+          console.error("Erro no proxy DANFSE:", error.message);
+          
+          if (error.response) {
+             console.error("Status:", error.response.status);
+             console.error("Data:", error.response.data ? error.response.data.toString() : 'No data');
+          }
+          res.status(500).json({ 
+             error: "Erro ao baixar o PDF da DANFSE. Verifique se o certificado está correto e válido.",
+             details: error.message,
+             url: error.config?.url
+          });
+      }
+  });
+
+  // System Logs
+  app.get("/api/system-logs", requireAuth, async (_req, res) => {
+    try {
+      const logs = await storage.getSystemLogs();
+      res.json(logs);
+    } catch (error) {
+      console.error("Get system logs error:", error);
+      res.status(500).json({ error: "Erro ao buscar logs do sistema" });
+    }
+  });
+
+  app.delete("/api/system-logs", requireAuth, async (_req, res) => {
+    try {
+      await storage.clearSystemLogs();
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Clear system logs error:", error);
+      res.status(500).json({ error: "Erro ao limpar logs do sistema" });
+    }
+  });
+
+
+  // Projects
+  app.get("/api/projects", requireAuth, async (req, res) => {
+    try {
+      const projects = await storage.getProjects();
+      res.json(projects);
+    } catch (error) {
+      console.error("Get projects error:", error);
+      res.status(500).json({ error: "Erro ao buscar projetos" });
+    }
+  });
+
+  app.get("/api/projects/:id", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: "Projeto não encontrado" });
+      res.json(project);
+    } catch (error) {
+      console.error("Get project error:", error);
+      res.status(500).json({ error: "Erro ao buscar projeto" });
+    }
+  });
+
+  app.post("/api/projects", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.createProject(req.body);
+      res.status(201).json(project);
+    } catch (error) {
+      console.error("Create project error:", error);
+      res.status(500).json({ error: "Erro ao criar projeto" });
+    }
+  });
+
+  app.patch("/api/projects/:id", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.updateProject(req.params.id, req.body);
+      if (!project) return res.status(404).json({ error: "Projeto não encontrado" });
+      res.json(project);
+    } catch (error) {
+      console.error("Update project error:", error);
+      res.status(500).json({ error: "Erro ao atualizar projeto" });
+    }
+  });
+
+  app.delete("/api/projects/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteProject(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete project error:", error);
+      res.status(500).json({ error: "Erro ao excluir projeto" });
+    }
+  });
+
+  // Project Analysts
+  app.get("/api/projects/:id/analysts", requireAuth, async (req, res) => {
+    try {
+      const analysts = await storage.getProjectAnalysts(req.params.id);
+      res.json(analysts);
+    } catch (error) {
+      console.error("Get project analysts error:", error);
+      res.status(500).json({ error: "Erro ao buscar analistas do projeto" });
+    }
+  });
+
+  app.post("/api/project-analysts", requireAuth, async (req, res) => {
+    try {
+      const relation = await storage.addProjectAnalyst(req.body);
+      res.status(201).json(relation);
+    } catch (error) {
+      console.error("Add project analyst error:", error);
+      res.status(500).json({ error: "Erro ao vincular analista ao projeto" });
+    }
+  });
+
+  app.delete("/api/project-analysts/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.removeProjectAnalyst(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Remove project analyst error:", error);
+      res.status(500).json({ error: "Erro ao remover analista do projeto" });
+    }
+  });
+
+  // Project Partners
+  app.get("/api/projects/:id/partners", requireAuth, async (req, res) => {
+    try {
+      const partners = await storage.getProjectPartners(req.params.id);
+      res.json(partners);
+    } catch (error) {
+      console.error("Get project partners error:", error);
+      res.status(500).json({ error: "Erro ao buscar parceiros do projeto" });
+    }
+  });
+
+  app.post("/api/project-partners", requireAuth, async (req, res) => {
+    try {
+      const relation = await storage.addProjectPartner(req.body);
+      res.status(201).json(relation);
+    } catch (error) {
+      console.error("Add project partner error:", error);
+      res.status(500).json({ error: "Erro ao vincular parceiro ao projeto" });
+    }
+  });
+
+  app.delete("/api/project-partners/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.removeProjectPartner(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Remove project partner error:", error);
+      res.status(500).json({ error: "Erro ao remover parceiro do projeto" });
     }
   });
 

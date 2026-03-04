@@ -1,0 +1,8 @@
+Produção: https://cdpj.partners.bancointer.com.br/cobranca/v3/cobrancas/{codigoSolicitacao}/pdf
+SandBox: https://cdpj-sandbox.partners.uatinter.co/cobranca/v3/cobrancas/{codigoSolicitacao}/pdf
+
+PDF
+
+{
+"pdf": "JVBERi0xLjUKJeLjz9MKMyAwIG9..." -> Código de Solicitação que retorna da requisição Anterior
+}

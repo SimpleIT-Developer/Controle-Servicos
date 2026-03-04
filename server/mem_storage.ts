@@ -1,39 +1,37 @@
 import {
   type User, type InsertUser,
-  type Landlord, type InsertLandlord,
-  type Tenant, type InsertTenant,
-  type Guarantor, type InsertGuarantor,
-  type ServiceProvider, type InsertServiceProvider,
-  type Property, type InsertProperty,
+  type Company, type InsertCompany,
+  type Client, type InsertClient,
+  type Analyst, type InsertAnalyst,
+  type ServiceCatalog, type InsertServiceCatalog,
   type Contract, type InsertContract,
-  type Service, type InsertService,
+  type ContractItem, type InsertContractItem,
   type Receipt, type InsertReceipt,
   type CashTransaction, type InsertCashTransaction,
-  type LandlordTransfer, type InsertLandlordTransfer,
   type Invoice, type InsertInvoice,
   type NfseConfig, type InsertNfseConfig,
   type NfseLote, type InsertNfseLote,
   type NfseEmissao, type InsertNfseEmissao,
+  type SystemLog, type InsertSystemLog,
 } from "@shared/schema";
 import type { IStorage } from "./storage";
 import { randomUUID } from "crypto";
 
 export class MemStorage implements IStorage {
   private users: Map<string, User> = new Map();
-  private landlords: Map<string, Landlord> = new Map();
-  private tenants: Map<string, Tenant> = new Map();
-  private guarantors: Map<string, Guarantor> = new Map();
-  private serviceProviders: Map<string, ServiceProvider> = new Map();
-  private properties: Map<string, Property> = new Map();
+  private companies: Map<string, Company> = new Map();
+  private clients: Map<string, Client> = new Map();
+  private analysts: Map<string, Analyst> = new Map();
+  private serviceCatalog: Map<string, ServiceCatalog> = new Map();
   private contracts: Map<string, Contract> = new Map();
-  private services: Map<string, Service> = new Map();
+  private contractItems: Map<string, ContractItem> = new Map();
   private receipts: Map<string, Receipt> = new Map();
   private cashTransactions: Map<string, CashTransaction> = new Map();
-  private landlordTransfers: Map<string, LandlordTransfer> = new Map();
   private invoices: Map<string, Invoice> = new Map();
   private nfseConfig: NfseConfig | undefined;
   private nfseLotes: Map<string, NfseLote> = new Map();
   private nfseEmissoes: Map<string, NfseEmissao> = new Map();
+  private systemLogs: Map<string, SystemLog> = new Map();
 
   async getUser(id: string): Promise<User | undefined> {
     return this.users.get(id);
@@ -55,185 +53,160 @@ export class MemStorage implements IStorage {
     return user;
   }
 
-  async getLandlords(): Promise<Landlord[]> {
-    return Array.from(this.landlords.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  // Companies
+  async getCompanies(): Promise<Company[]> {
+    return Array.from(this.companies.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
-  async getLandlord(id: string): Promise<Landlord | undefined> {
-    return this.landlords.get(id);
+  async getCompany(id: string): Promise<Company | undefined> {
+    return this.companies.get(id);
   }
 
-  async createLandlord(data: InsertLandlord): Promise<Landlord> {
+  async createCompany(data: InsertCompany): Promise<Company> {
     const id = data.id || randomUUID();
-    const landlord: Landlord = {
+    const company: Company = {
       ...data,
       id,
-      email: data.email || null,
+      tradeName: data.tradeName || null,
+      address: data.address || null,
       phone: data.phone || null,
-      pixKey: data.pixKey || null,
+      email: data.email || null,
+      city: data.city || null,
+      state: data.state || null,
+      zipCode: data.zipCode || null,
+      bank: data.bank || null,
+      branch: data.branch || null,
+      account: data.account || null,
       pixKeyType: data.pixKeyType || null,
-      address: data.address || null,
+      pixKey: data.pixKey || null,
       createdAt: new Date(),
     };
-    this.landlords.set(id, landlord);
-    return landlord;
+    this.companies.set(id, company);
+    return company;
   }
 
-  async updateLandlord(id: string, data: Partial<InsertLandlord>): Promise<Landlord | undefined> {
-    const existing = this.landlords.get(id);
+  async updateCompany(id: string, data: Partial<InsertCompany>): Promise<Company | undefined> {
+    const existing = this.companies.get(id);
     if (!existing) return undefined;
     const updated = { ...existing, ...data };
-    this.landlords.set(id, updated);
+    this.companies.set(id, updated);
     return updated;
   }
 
-  async deleteLandlord(id: string): Promise<void> {
-    this.landlords.delete(id);
+  async deleteCompany(id: string): Promise<void> {
+    this.companies.delete(id);
   }
 
-  async getTenants(): Promise<Tenant[]> {
-    return Array.from(this.tenants.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  // Clients
+  async getClients(): Promise<Client[]> {
+    return Array.from(this.clients.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
-  async getTenant(id: string): Promise<Tenant | undefined> {
-    return this.tenants.get(id);
+  async getClient(id: string): Promise<Client | undefined> {
+    return this.clients.get(id);
   }
 
-  async createTenant(data: InsertTenant): Promise<Tenant> {
+  async createClient(data: InsertClient): Promise<Client> {
     const id = data.id || randomUUID();
-    const tenant: Tenant = {
+    const client: Client = {
+      ...data,
+      id,
+      address: data.address || null,
+      phone: data.phone || null,
+      email: data.email || null,
+      city: data.city || null,
+      state: data.state || null,
+      zipCode: data.zipCode || null,
+      createdAt: new Date(),
+    };
+    this.clients.set(id, client);
+    return client;
+  }
+
+  async updateClient(id: string, data: Partial<InsertClient>): Promise<Client | undefined> {
+    const existing = this.clients.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...data };
+    this.clients.set(id, updated);
+    return updated;
+  }
+
+  async deleteClient(id: string): Promise<void> {
+    this.clients.delete(id);
+  }
+
+  // Analysts
+  async getAnalysts(): Promise<Analyst[]> {
+    return Array.from(this.analysts.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async getAnalyst(id: string): Promise<Analyst | undefined> {
+    return this.analysts.get(id);
+  }
+
+  async createAnalyst(data: InsertAnalyst): Promise<Analyst> {
+    const id = data.id || randomUUID();
+    const analyst: Analyst = {
       ...data,
       id,
       email: data.email || null,
       phone: data.phone || null,
-      address: data.address || null,
+      role: data.role || null,
       createdAt: new Date(),
     };
-    this.tenants.set(id, tenant);
-    return tenant;
+    this.analysts.set(id, analyst);
+    return analyst;
   }
 
-  async updateTenant(id: string, data: Partial<InsertTenant>): Promise<Tenant | undefined> {
-    const existing = this.tenants.get(id);
+  async updateAnalyst(id: string, data: Partial<InsertAnalyst>): Promise<Analyst | undefined> {
+    const existing = this.analysts.get(id);
     if (!existing) return undefined;
     const updated = { ...existing, ...data };
-    this.tenants.set(id, updated);
+    this.analysts.set(id, updated);
     return updated;
   }
 
-  async deleteTenant(id: string): Promise<void> {
-    this.tenants.delete(id);
+  async deleteAnalyst(id: string): Promise<void> {
+    this.analysts.delete(id);
   }
 
-  async getGuarantors(): Promise<Guarantor[]> {
-    return Array.from(this.guarantors.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  // Service Catalog
+  async getServiceCatalog(): Promise<ServiceCatalog[]> {
+    return Array.from(this.serviceCatalog.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
-  async getGuarantor(id: string): Promise<Guarantor | undefined> {
-    return this.guarantors.get(id);
+  async getServiceCatalogItem(id: string): Promise<ServiceCatalog | undefined> {
+    return this.serviceCatalog.get(id);
   }
 
-  async createGuarantor(data: InsertGuarantor): Promise<Guarantor> {
+  async createServiceCatalogItem(data: InsertServiceCatalog): Promise<ServiceCatalog> {
     const id = data.id || randomUUID();
-    const guarantor: Guarantor = {
+    const item: ServiceCatalog = {
       ...data,
       id,
-      email: data.email || null,
-      phone: data.phone || null,
-      address: data.address || null,
+      description: data.description || null,
+      price: data.price ? String(data.price) : null,
       createdAt: new Date(),
     };
-    this.guarantors.set(id, guarantor);
-    return guarantor;
+    this.serviceCatalog.set(id, item);
+    return item;
   }
 
-  async updateGuarantor(id: string, data: Partial<InsertGuarantor>): Promise<Guarantor | undefined> {
-    const existing = this.guarantors.get(id);
+  async updateServiceCatalogItem(id: string, data: Partial<InsertServiceCatalog>): Promise<ServiceCatalog | undefined> {
+    const existing = this.serviceCatalog.get(id);
     if (!existing) return undefined;
     const updated = { ...existing, ...data };
-    this.guarantors.set(id, updated);
+    this.serviceCatalog.set(id, updated);
     return updated;
   }
 
-  async deleteGuarantor(id: string): Promise<void> {
-    this.guarantors.delete(id);
+  async deleteServiceCatalogItem(id: string): Promise<void> {
+    this.serviceCatalog.delete(id);
   }
 
-  async getServiceProviders(): Promise<ServiceProvider[]> {
-    return Array.from(this.serviceProviders.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  }
-
-  async getServiceProvider(id: string): Promise<ServiceProvider | undefined> {
-    return this.serviceProviders.get(id);
-  }
-
-  async createServiceProvider(data: InsertServiceProvider): Promise<ServiceProvider> {
-    const id = data.id || randomUUID();
-    const provider: ServiceProvider = {
-      ...data,
-      id,
-      doc: data.doc || null,
-      email: data.email || null,
-      phone: data.phone || null,
-      createdAt: new Date(),
-    };
-    this.serviceProviders.set(id, provider);
-    return provider;
-  }
-
-  async updateServiceProvider(id: string, data: Partial<InsertServiceProvider>): Promise<ServiceProvider | undefined> {
-    const existing = this.serviceProviders.get(id);
-    if (!existing) return undefined;
-    const updated = { ...existing, ...data };
-    this.serviceProviders.set(id, updated);
-    return updated;
-  }
-
-  async deleteServiceProvider(id: string): Promise<void> {
-    this.serviceProviders.delete(id);
-  }
-
-  async getProperties(): Promise<Property[]> {
-    return Array.from(this.properties.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  }
-
-  async getProperty(id: string): Promise<Property | undefined> {
-    return this.properties.get(id);
-  }
-
-  async createProperty(data: InsertProperty): Promise<Property> {
-    const id = data.id || randomUUID();
-    const property: Property = {
-      ...data,
-      id,
-      landlordId: data.landlordId || null,
-      status: data.status || "available",
-      createdAt: new Date(),
-    };
-    this.properties.set(id, property);
-    return property;
-  }
-
-  async updateProperty(id: string, data: Partial<InsertProperty>): Promise<Property | undefined> {
-    const existing = this.properties.get(id);
-    if (!existing) return undefined;
-    const updated = { ...existing, ...data };
-    this.properties.set(id, updated);
-    return updated;
-  }
-
-  async deleteProperty(id: string): Promise<void> {
-    this.properties.delete(id);
-  }
-
+  // Contracts
   async getContracts(): Promise<Contract[]> {
     return Array.from(this.contracts.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  }
-
-  async getActiveContracts(): Promise<Contract[]> {
-    return Array.from(this.contracts.values())
-      .filter((c) => c.status === "active")
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   async getContract(id: string): Promise<Contract | undefined> {
@@ -242,47 +215,22 @@ export class MemStorage implements IStorage {
 
   async createContract(data: InsertContract): Promise<Contract> {
     const id = data.id || randomUUID();
-    // Ensure dates are Dates
     const contract: Contract = {
       ...data,
       id,
-      startDate: typeof data.startDate === 'string' ? new Date(data.startDate) : data.startDate as unknown as string,
-      endDate: typeof data.endDate === 'string' ? new Date(data.endDate) : data.endDate as unknown as string,
-      firstDueDate: data.firstDueDate ? (typeof data.firstDueDate === 'string' ? new Date(data.firstDueDate) : data.firstDueDate as unknown as string) : null,
+      endDate: data.endDate || null,
+      amount: String(data.amount),
       status: data.status || "active",
       createdAt: new Date(),
     };
-    // Fix type mismatch for date strings vs Date objects if schema differs
-    // Schema says date(), which in Drizzle PG is string or Date? Usually string YYYY-MM-DD.
-    // In memory we store what matches the type.
     this.contracts.set(id, contract);
-
-    // Update property status
-    const property = this.properties.get(data.propertyId);
-    if (property) {
-      property.status = "rented";
-      this.properties.set(data.propertyId, property);
-    }
-
     return contract;
   }
 
   async updateContract(id: string, data: Partial<InsertContract>): Promise<Contract | undefined> {
     const existing = this.contracts.get(id);
     if (!existing) return undefined;
-    
-    const updates: any = { ...data };
-    if (data.startDate && typeof data.startDate === 'string') {
-      updates.startDate = new Date(data.startDate);
-    }
-    if (data.endDate && typeof data.endDate === 'string') {
-      updates.endDate = new Date(data.endDate);
-    }
-    if (data.firstDueDate && typeof data.firstDueDate === 'string') {
-      updates.firstDueDate = new Date(data.firstDueDate);
-    }
-
-    const updated = { ...existing, ...updates } as Contract;
+    const updated = { ...existing, ...data };
     this.contracts.set(id, updated);
     return updated;
   }
@@ -291,51 +239,55 @@ export class MemStorage implements IStorage {
     this.contracts.delete(id);
   }
 
-  async getServices(): Promise<Service[]> {
-    return Array.from(this.services.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  // Contract Items
+  async getContractItems(contractId: string): Promise<ContractItem[]> {
+    return Array.from(this.contractItems.values())
+      .filter(i => i.contractId === contractId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
-  async getServicesByContractAndRef(contractId: string, year: number, month: number): Promise<Service[]> {
-    return Array.from(this.services.values()).filter(
-      (s) => s.contractId === contractId && s.refYear === year && s.refMonth === month
-    );
+  async getContractItemsByRef(contractId: string, year: number, month: number): Promise<ContractItem[]> {
+    return Array.from(this.contractItems.values())
+      .filter(i => i.contractId === contractId && i.refYear === year && i.refMonth === month)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
-  async getService(id: string): Promise<Service | undefined> {
-    return this.services.get(id);
-  }
-
-  async createService(data: InsertService): Promise<Service> {
+  async createContractItem(data: InsertContractItem): Promise<ContractItem> {
     const id = data.id || randomUUID();
-    const service: Service = {
+    const item: ContractItem = {
       ...data,
       id,
-      providerId: data.providerId || null,
+      serviceCatalogId: data.serviceCatalogId || null,
+      analystId: data.analystId || null,
+      amount: String(data.amount),
+      chargedTo: data.chargedTo || "CLIENT",
+      passThrough: data.passThrough ?? false,
       createdAt: new Date(),
     };
-    this.services.set(id, service);
-    return service;
+    this.contractItems.set(id, item);
+    return item;
   }
 
-  async updateService(id: string, data: Partial<InsertService>): Promise<Service | undefined> {
-    const existing = this.services.get(id);
+  async updateContractItem(id: string, data: Partial<InsertContractItem>): Promise<ContractItem | undefined> {
+    const existing = this.contractItems.get(id);
     if (!existing) return undefined;
     const updated = { ...existing, ...data };
-    this.services.set(id, updated);
+    this.contractItems.set(id, updated);
     return updated;
   }
 
-  async deleteService(id: string): Promise<void> {
-    this.services.delete(id);
+  async deleteContractItem(id: string): Promise<void> {
+    this.contractItems.delete(id);
   }
 
+  // Receipts
   async getReceipts(): Promise<Receipt[]> {
     return Array.from(this.receipts.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   async getReceiptsByRef(year: number, month: number): Promise<Receipt[]> {
     return Array.from(this.receipts.values())
-      .filter((r) => r.refYear === year && r.refMonth === month)
+      .filter(r => r.refYear === year && r.refMonth === month)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
@@ -345,7 +297,7 @@ export class MemStorage implements IStorage {
 
   async getReceiptByContractAndRef(contractId: string, year: number, month: number): Promise<Receipt | undefined> {
     return Array.from(this.receipts.values()).find(
-      (r) => r.contractId === contractId && r.refYear === year && r.refMonth === month
+      r => r.contractId === contractId && r.refYear === year && r.refMonth === month
     );
   }
 
@@ -354,7 +306,13 @@ export class MemStorage implements IStorage {
     const receipt: Receipt = {
       ...data,
       id,
-      isInvoiceIssued: data.isInvoiceIssued ?? false,
+      servicesAmount: data.servicesAmount ? String(data.servicesAmount) : "0",
+      amount: String(data.amount),
+      totalDue: String(data.totalDue),
+      status: data.status || "draft",
+      isInvoiceGenerated: data.isInvoiceGenerated || false,
+      isInvoiceIssued: data.isInvoiceIssued || false,
+      isInvoiceCancelled: data.isInvoiceCancelled || false,
       createdAt: new Date(),
     };
     this.receipts.set(id, receipt);
@@ -377,13 +335,9 @@ export class MemStorage implements IStorage {
     }
   }
 
+  // Cash Transactions
   async getCashTransactions(): Promise<CashTransaction[]> {
-    return Array.from(this.cashTransactions.values()).sort((a, b) => {
-      // date can be string or Date
-      const dateA = new Date(a.date).getTime();
-      const dateB = new Date(b.date).getTime();
-      return dateB - dateA;
-    });
+    return Array.from(this.cashTransactions.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   async getCashTransaction(id: string): Promise<CashTransaction | undefined> {
@@ -395,7 +349,10 @@ export class MemStorage implements IStorage {
     const transaction: CashTransaction = {
       ...data,
       id,
-      date: typeof data.date === 'string' ? new Date(data.date) : data.date as unknown as string,
+      description: data.description || null,
+      receiptId: data.receiptId || null,
+      amount: String(data.amount),
+      date: typeof data.date === 'string' ? data.date : new Date().toISOString(), // Simplified date handling
       createdAt: new Date(),
     };
     this.cashTransactions.set(id, transaction);
@@ -405,7 +362,7 @@ export class MemStorage implements IStorage {
   async updateCashTransaction(id: string, data: Partial<InsertCashTransaction>): Promise<CashTransaction | undefined> {
     const existing = this.cashTransactions.get(id);
     if (!existing) return undefined;
-    const updated = { ...existing, ...data } as CashTransaction;
+    const updated = { ...existing, ...data };
     this.cashTransactions.set(id, updated);
     return updated;
   }
@@ -415,72 +372,14 @@ export class MemStorage implements IStorage {
   }
 
   async deleteCashTransactionByReceiptAndType(receiptId: string, type: "IN" | "OUT"): Promise<void> {
-    for (const [id, transaction] of this.cashTransactions.entries()) {
-      if (transaction.receiptId === receiptId && transaction.type === type) {
+    for (const [id, tx] of this.cashTransactions.entries()) {
+      if (tx.receiptId === receiptId && tx.type === type) {
         this.cashTransactions.delete(id);
       }
     }
   }
 
-  async getLandlordTransfers(): Promise<LandlordTransfer[]> {
-    return Array.from(this.landlordTransfers.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  }
-
-  async getLandlordTransfer(id: string): Promise<LandlordTransfer | undefined> {
-    return this.landlordTransfers.get(id);
-  async getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<LandlordTransfer[]> {
-    const transfers = Array.from(this.landlordTransfers.values());
-    const filtered: LandlordTransfer[] = [];
-    
-    for (const transfer of transfers) {
-      if (type === "paid") {
-        if (transfer.paidAt) {
-          const paidDate = new Date(transfer.paidAt);
-          if (paidDate.getFullYear() === year && paidDate.getMonth() + 1 === month) {
-            filtered.push(transfer);
-          }
-        }
-      } else {
-        const receipt = this.receipts.get(transfer.receiptId);
-        if (receipt && receipt.refYear === year && receipt.refMonth === month) {
-          filtered.push(transfer);
-        }
-      }
-    }
-    
-    return filtered;
-  }
-
-  async getRevenueReport(year: number, month: number): Promise<RevenueReportItem[]> {
-    return [];
-  }
-
-  async createLandlordTransfer(data: InsertLandlordTransfer): Promise<LandlordTransfer> {
-    const id = data.id || randomUUID();
-    const transfer: LandlordTransfer = {
-      ...data,
-      id,
-      referenceDate: typeof data.referenceDate === 'string' ? new Date(data.referenceDate) : data.referenceDate as unknown as string,
-      paidAt: data.paidAt ? (typeof data.paidAt === 'string' ? new Date(data.paidAt) : data.paidAt) : null,
-      receiptUrl: data.receiptUrl || null,
-      createdAt: new Date(),
-    };
-    this.landlordTransfers.set(id, transfer);
-    return transfer;
-  }
-
-  async updateLandlordTransfer(id: string, data: Partial<InsertLandlordTransfer>): Promise<LandlordTransfer | undefined> {
-    const existing = this.landlordTransfers.get(id);
-    if (!existing) return undefined;
-    const updated = { ...existing, ...data } as LandlordTransfer;
-    this.landlordTransfers.set(id, updated);
-    return updated;
-  }
-
-  async deleteLandlordTransfer(id: string): Promise<void> {
-    this.landlordTransfers.delete(id);
-  }
-
+  // Invoices
   async getInvoices(): Promise<Invoice[]> {
     return Array.from(this.invoices.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
@@ -494,9 +393,13 @@ export class MemStorage implements IStorage {
     const invoice: Invoice = {
       ...data,
       id,
-      externalId: data.externalId || null,
+      number: data.number || null,
+      verificationCode: data.verificationCode || null,
+      xmlUrl: data.xmlUrl || null,
       pdfUrl: data.pdfUrl || null,
       errorMessage: data.errorMessage || null,
+      issuedAt: data.issuedAt || null,
+      status: data.status || "PENDENTE",
       createdAt: new Date(),
     };
     this.invoices.set(id, invoice);
@@ -515,60 +418,40 @@ export class MemStorage implements IStorage {
     this.invoices.delete(id);
   }
 
-  // NFS-e Implementation
+  // NFS-e Config
   async getNfseConfig(): Promise<NfseConfig | undefined> {
     return this.nfseConfig;
   }
 
-  async createNfseConfig(data: InsertNfseConfig): Promise<NfseConfig> {
-    const id = data.id || randomUUID();
+  async upsertNfseConfig(data: InsertNfseConfig): Promise<NfseConfig> {
     const config: NfseConfig = {
-      ...data,
-      id,
-      regimeTributario: data.regimeTributario || null,
-      cnae: data.cnae || null,
-      certificadoSenha: data.certificadoSenha || null,
-      issRetido: data.issRetido || false,
+      id: this.nfseConfig?.id || randomUUID(),
+      cidade: data.cidade || "Tatuí",
       ambiente: data.ambiente || "homologacao",
+      login: data.login || null,
+      senha: data.senha || null,
+      token: data.token || null,
+      clientSecret: data.clientSecret || null,
+      itemServico: data.itemServico || "11.01",
+      serieNfse: data.serieNfse || "900",
       updatedAt: new Date(),
     };
     this.nfseConfig = config;
     return config;
   }
 
-  async updateNfseConfig(id: string, data: Partial<InsertNfseConfig>): Promise<NfseConfig | undefined> {
-    if (!this.nfseConfig || this.nfseConfig.id !== id) return undefined;
-    this.nfseConfig = { ...this.nfseConfig, ...data, updatedAt: new Date() };
-    return this.nfseConfig;
-  }
-
-  async upsertNfseConfig(data: InsertNfseConfig): Promise<NfseConfig> {
-    if (this.nfseConfig) {
-      this.nfseConfig = { ...this.nfseConfig, ...data, updatedAt: new Date() };
-      return this.nfseConfig;
-    } else {
-      return this.createNfseConfig(data);
-    }
-  }
-
+  // NFS-e Lotes & Emissões
   async createNfseLote(data: InsertNfseLote): Promise<NfseLote> {
     const id = data.id || randomUUID();
     const lote: NfseLote = {
       ...data,
       id,
-      criadoPorUsuarioId: data.criadoPorUsuarioId || null,
-      qtdItens: data.qtdItens || 0,
-      valorTotal: data.valorTotal || "0",
       status: data.status || "CRIADO",
       createdAt: new Date(),
       updatedAt: new Date(),
     };
     this.nfseLotes.set(id, lote);
     return lote;
-  }
-
-  async getNfseLote(id: string): Promise<NfseLote | undefined> {
-    return this.nfseLotes.get(id);
   }
 
   async updateNfseLote(id: string, data: Partial<InsertNfseLote>): Promise<NfseLote | undefined> {
@@ -579,26 +462,26 @@ export class MemStorage implements IStorage {
     return updated;
   }
 
+  async getNfseLote(id: string): Promise<NfseLote | undefined> {
+    return this.nfseLotes.get(id);
+  }
+
   async createNfseEmissao(data: InsertNfseEmissao): Promise<NfseEmissao> {
     const id = data.id || randomUUID();
     const emissao: NfseEmissao = {
       ...data,
       id,
       loteId: data.loteId || null,
-      tomadorEmail: data.tomadorEmail || null,
-      tomadorEnderecoJson: data.tomadorEnderecoJson || null,
-      status: data.status || "PENDENTE",
-      idempotencyKey: data.idempotencyKey || null,
-      apiRequestRaw: data.apiRequestRaw || null,
-      apiResponseRaw: data.apiResponseRaw || null,
-      numeroNfse: data.numeroNfse || null,
+      numero: data.numero || null,
       codigoVerificacao: data.codigoVerificacao || null,
-      chaveAcesso: data.chaveAcesso || null,
+      linkUrl: data.linkUrl || null,
       xmlUrl: data.xmlUrl || null,
-      pdfUrl: data.pdfUrl || null,
-      erroCodigo: data.erroCodigo || null,
-      erroMensagem: data.erroMensagem || null,
-      retryCount: data.retryCount || 0,
+      error: data.error || null,
+      valor: data.valor ? String(data.valor) : null,
+      tomadorNome: data.tomadorNome || null,
+      tomadorCpfCnpj: data.tomadorCpfCnpj || null,
+      discriminacao: data.discriminacao || null,
+      status: data.status || "PENDENTE",
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -607,15 +490,15 @@ export class MemStorage implements IStorage {
   }
 
   async getNfseEmissoes(): Promise<NfseEmissao[]> {
-    return Array.from(this.nfseEmissoes.values());
+    return Array.from(this.nfseEmissoes.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   async getNfseEmissao(id: string): Promise<NfseEmissao | undefined> {
     return this.nfseEmissoes.get(id);
   }
 
-  async getNfseEmissoesByLote(loteId: string): Promise<NfseEmissao[]> {
-    return Array.from(this.nfseEmissoes.values()).filter(e => e.loteId === loteId);
+  async getPendingNfseEmissoes(): Promise<NfseEmissao[]> {
+    return Array.from(this.nfseEmissoes.values()).filter(e => e.status === "PENDENTE");
   }
 
   async updateNfseEmissao(id: string, data: Partial<InsertNfseEmissao>): Promise<NfseEmissao | undefined> {
@@ -626,11 +509,32 @@ export class MemStorage implements IStorage {
     return updated;
   }
 
-  async getNfseEmissaoByIdempotency(key: string): Promise<NfseEmissao | undefined> {
-    return Array.from(this.nfseEmissoes.values()).find(e => e.idempotencyKey === key);
+  // System Logs
+  async createSystemLog(data: InsertSystemLog): Promise<SystemLog> {
+    const id = data.id || randomUUID();
+    const log: SystemLog = {
+      ...data,
+      id,
+      details: data.details || null,
+      correlationId: data.correlationId || null,
+      createdAt: new Date(),
+    };
+    this.systemLogs.set(id, log);
+    return log;
   }
 
-  async getPendingNfseEmissoes(): Promise<NfseEmissao[]> {
-    return Array.from(this.nfseEmissoes.values()).filter(e => e.status === "PENDENTE");
+  async getSystemLogs(): Promise<SystemLog[]> {
+    return Array.from(this.systemLogs.values()).sort((a, b) => b.createdAt!.getTime() - a.createdAt!.getTime());
   }
+
+  async clearSystemLogs(): Promise<void> {
+    this.systemLogs.clear();
+  }
+
+  // System Contracts (Stub implementation to satisfy IStorage)
+  async getSystemContracts(): Promise<SystemContract[]> { return []; }
+  async getSystemContract(id: string): Promise<SystemContract | undefined> { return undefined; }
+  async createSystemContract(data: InsertSystemContract): Promise<SystemContract> { throw new Error("Not implemented"); }
+  async updateSystemContract(id: string, data: Partial<InsertSystemContract>): Promise<SystemContract | undefined> { return undefined; }
+  async deleteSystemContract(id: string): Promise<void> {}
 }

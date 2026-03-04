@@ -1,85 +1,113 @@
 import {
-  users, landlords, tenants, guarantors, serviceProviders, properties, contracts, services,
-  receipts, cashTransactions, landlordTransfers, invoices,
+  users, companies, clients, analysts, serviceCatalog, contracts, contractItems,
+  receipts, cashTransactions, invoices,
+  projects, projectAnalysts,
   type User, type InsertUser,
-  type Landlord, type InsertLandlord,
-  type Tenant, type InsertTenant,
-  type Guarantor, type InsertGuarantor,
-  type ServiceProvider, type InsertServiceProvider,
-  type Property, type InsertProperty,
+  type Company, type InsertCompany,
+  type Client, type InsertClient,
+  type Analyst, projectPartners,
+  type Project, type InsertProject,
+  type ProjectAnalyst, type InsertProjectAnalyst,
+  type ProjectPartner, type InsertProjectPartner,
+  partners, type Partner, type InsertPartner,
+  type ServiceCatalog, type InsertServiceCatalog,
   type Contract, type InsertContract,
-  type Service, type InsertService,
+  type ContractItem, type InsertContractItem,
   type Receipt, type InsertReceipt,
   type CashTransaction, type InsertCashTransaction,
-  type LandlordTransfer, type InsertLandlordTransfer,
   type Invoice, type InsertInvoice,
-  type NfseConfig, type InsertNfseConfig,
-  type NfseLote, type InsertNfseLote,
-  type NfseEmissao, type InsertNfseEmissao,
-  type SystemLog, type InsertSystemLog,
-  nfseConfig, nfseLotes, nfseEmissoes, systemLogs,
+  nfseConfigs, type NfseConfig, type InsertNfseConfig,
+  nfseLotes, type NfseLote, type InsertNfseLote,
+  nfseEmissoes, type NfseEmissao, type InsertNfseEmissao,
+  timesheetEntries, type TimesheetEntry, type InsertTimesheetEntry,
+  systemContracts, type SystemContract, type InsertSystemContract,
+  systemLogs, type SystemLog, type InsertSystemLog,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, gte, lte, inArray, ne } from "drizzle-orm";
-import { MemStorage } from "./mem_storage";
+import { eq, and, desc, gte, lte, inArray, ne, isNull } from "drizzle-orm";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
 
-  getLandlords(): Promise<Landlord[]>;
-  getLandlord(id: string): Promise<Landlord | undefined>;
-  createLandlord(data: InsertLandlord): Promise<Landlord>;
-  updateLandlord(id: string, data: Partial<InsertLandlord>): Promise<Landlord | undefined>;
-  deleteLandlord(id: string): Promise<void>;
+  // Companies (Empresas)
+  getCompanies(): Promise<Company[]>;
+  getCompany(id: string): Promise<Company | undefined>;
+  createCompany(data: InsertCompany): Promise<Company>;
+  updateCompany(id: string, data: Partial<InsertCompany>): Promise<Company | undefined>;
+  deleteCompany(id: string): Promise<void>;
 
-  getTenants(): Promise<Tenant[]>;
-  getTenant(id: string): Promise<Tenant | undefined>;
-  createTenant(data: InsertTenant): Promise<Tenant>;
-  updateTenant(id: string, data: Partial<InsertTenant>): Promise<Tenant | undefined>;
-  deleteTenant(id: string): Promise<void>;
+  // Clients (Clientes)
+  getClients(): Promise<Client[]>;
+  getClient(id: string): Promise<Client | undefined>;
+  createClient(data: InsertClient): Promise<Client>;
+  updateClient(id: string, data: Partial<InsertClient>): Promise<Client | undefined>;
+  deleteClient(id: string): Promise<void>;
 
-  getGuarantors(): Promise<Guarantor[]>;
-  getGuarantor(id: string): Promise<Guarantor | undefined>;
-  createGuarantor(data: InsertGuarantor): Promise<Guarantor>;
-  updateGuarantor(id: string, data: Partial<InsertGuarantor>): Promise<Guarantor | undefined>;
-  deleteGuarantor(id: string): Promise<void>;
+  // Analysts (Analistas)
+  getAnalysts(): Promise<Analyst[]>;
+  getAnalyst(id: string): Promise<Analyst | undefined>;
+  createAnalyst(data: InsertAnalyst): Promise<Analyst>;
+  updateAnalyst(id: string, data: Partial<InsertAnalyst>): Promise<Analyst | undefined>;
+  deleteAnalyst(id: string): Promise<void>;
 
-  getServiceProviders(): Promise<ServiceProvider[]>;
-  getServiceProvider(id: string): Promise<ServiceProvider | undefined>;
-  createServiceProvider(data: InsertServiceProvider): Promise<ServiceProvider>;
-  updateServiceProvider(id: string, data: Partial<InsertServiceProvider>): Promise<ServiceProvider | undefined>;
-  deleteServiceProvider(id: string): Promise<void>;
+  // Projects
+  getProjects(): Promise<Project[]>;
+  getProject(id: string): Promise<Project | undefined>;
+  createProject(data: InsertProject): Promise<Project>;
+  updateProject(id: string, data: Partial<InsertProject>): Promise<Project | undefined>;
+  deleteProject(id: string): Promise<void>;
 
-  getProperties(): Promise<Property[]>;
-  getProperty(id: string): Promise<Property | undefined>;
-  createProperty(data: InsertProperty): Promise<Property>;
-  updateProperty(id: string, data: Partial<InsertProperty>): Promise<Property | undefined>;
-  deleteProperty(id: string): Promise<void>;
+  // Project Analysts
+  getProjectAnalysts(projectId: string): Promise<(ProjectAnalyst & { analyst: Analyst })[]>;
+  addProjectAnalyst(data: InsertProjectAnalyst): Promise<ProjectAnalyst>;
+  removeProjectAnalyst(id: string): Promise<void>;
 
+  // Project Partners
+  getProjectPartners(projectId: string): Promise<(ProjectPartner & { partner: Partner })[]>;
+  addProjectPartner(data: InsertProjectPartner): Promise<ProjectPartner>;
+  removeProjectPartner(id: string): Promise<void>;
+
+  // Service Catalog
+  getServiceCatalog(): Promise<ServiceCatalog[]>;
+  getServiceCatalogItem(id: string): Promise<ServiceCatalog | undefined>;
+  createServiceCatalogItem(data: InsertServiceCatalog): Promise<ServiceCatalog>;
+  updateServiceCatalogItem(id: string, data: Partial<InsertServiceCatalog>): Promise<ServiceCatalog | undefined>;
+  deleteServiceCatalogItem(id: string): Promise<void>;
+
+  // Contracts
   getContracts(): Promise<Contract[]>;
-  getActiveContracts(): Promise<Contract[]>;
   getContract(id: string): Promise<Contract | undefined>;
   createContract(data: InsertContract): Promise<Contract>;
   updateContract(id: string, data: Partial<InsertContract>): Promise<Contract | undefined>;
   deleteContract(id: string): Promise<void>;
 
-  getServices(): Promise<Service[]>;
-  getServicesByContractAndRef(contractId: string, year: number, month: number): Promise<Service[]>;
-  getService(id: string): Promise<Service | undefined>;
-  createService(data: InsertService): Promise<Service>;
-  updateService(id: string, data: Partial<InsertService>): Promise<Service | undefined>;
-  deleteService(id: string): Promise<void>;
+  // Contract Items
+  getContractItems(contractId: string): Promise<ContractItem[]>;
+  getContractItemsByRef(contractId: string, year: number, month: number): Promise<ContractItem[]>;
+  createContractItem(data: InsertContractItem): Promise<ContractItem>;
+  updateContractItem(id: string, data: Partial<InsertContractItem>): Promise<ContractItem | undefined>;
+  deleteContractItem(id: string): Promise<void>;
 
+  // Receipts
   getReceipts(): Promise<Receipt[]>;
   getReceiptsByRef(year: number, month: number): Promise<Receipt[]>;
   getReceipt(id: string): Promise<Receipt | undefined>;
   getReceiptByContractAndRef(contractId: string, year: number, month: number): Promise<Receipt | undefined>;
+  getReceiptByProjectAndRef(projectId: string, year: number, month: number): Promise<Receipt | undefined>;
+  getReceiptBySystemContractAndRef(systemContractId: string, year: number, month: number): Promise<Receipt | undefined>;
   createReceipt(data: InsertReceipt): Promise<Receipt>;
   updateReceipt(id: string, data: Partial<InsertReceipt>): Promise<Receipt | undefined>;
   deleteDraftReceiptsByContractId(contractId: string): Promise<void>;
 
+  // Timesheet Entries
+  getTimesheetEntries(receiptId: string): Promise<(TimesheetEntry & { analyst?: Analyst, partner?: Partner })[]>;
+  createTimesheetEntry(data: InsertTimesheetEntry): Promise<TimesheetEntry>;
+  updateTimesheetEntry(id: string, data: Partial<InsertTimesheetEntry>): Promise<TimesheetEntry>;
+  deleteTimesheetEntry(id: string): Promise<void>;
+
+  // Cash Transactions
   getCashTransactions(): Promise<CashTransaction[]>;
   getCashTransaction(id: string): Promise<CashTransaction | undefined>;
   createCashTransaction(data: InsertCashTransaction): Promise<CashTransaction>;
@@ -87,43 +115,39 @@ export interface IStorage {
   deleteCashTransaction(id: string): Promise<void>;
   deleteCashTransactionByReceiptAndType(receiptId: string, type: "IN" | "OUT"): Promise<void>;
 
-  getLandlordTransfers(): Promise<LandlordTransfer[]>;
-  getLandlordTransfer(id: string): Promise<LandlordTransfer | undefined>;
-  getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<LandlordTransfer[]>;
-  getRevenueReport(year: number, month: number): Promise<RevenueReportItem[]>;
-
-  createLandlordTransfer(data: InsertLandlordTransfer): Promise<LandlordTransfer>;
-  updateLandlordTransfer(id: string, data: Partial<InsertLandlordTransfer>): Promise<LandlordTransfer | undefined>;
-  deleteLandlordTransfer(id: string): Promise<void>;
-
+  // Invoices
   getInvoices(): Promise<Invoice[]>;
+  getInvoicesByReceiptId(receiptId: string): Promise<Invoice[]>;
   getInvoice(id: string): Promise<Invoice | undefined>;
+  getNfseEmissaoByInvoiceId(invoiceId: string): Promise<NfseEmissao | undefined>;
   createInvoice(data: InsertInvoice): Promise<Invoice>;
   updateInvoice(id: string, data: Partial<InsertInvoice>): Promise<Invoice | undefined>;
   deleteInvoice(id: string): Promise<void>;
 
-  // NFS-e methods
-  getNfseConfig(): Promise<NfseConfig | undefined>;
-  createNfseConfig(data: InsertNfseConfig): Promise<NfseConfig>;
-  updateNfseConfig(id: string, data: Partial<InsertNfseConfig>): Promise<NfseConfig | undefined>;
+  // NFS-e Config
+  getNfseConfig(companyId?: string): Promise<NfseConfig | undefined>;
   upsertNfseConfig(data: InsertNfseConfig): Promise<NfseConfig>;
-  
+
+  // NFS-e Lotes & Emissões
   createNfseLote(data: InsertNfseLote): Promise<NfseLote>;
-  getNfseLote(id: string): Promise<NfseLote | undefined>;
   updateNfseLote(id: string, data: Partial<InsertNfseLote>): Promise<NfseLote | undefined>;
-  
+  getNfseLote(id: string): Promise<NfseLote | undefined>;
   createNfseEmissao(data: InsertNfseEmissao): Promise<NfseEmissao>;
   getNfseEmissoes(): Promise<NfseEmissao[]>;
   getNfseEmissao(id: string): Promise<NfseEmissao | undefined>;
-  getNfseEmissoesByLote(loteId: string): Promise<NfseEmissao[]>;
-  updateNfseEmissao(id: string, data: Partial<InsertNfseEmissao>): Promise<NfseEmissao | undefined>;
-  getNfseEmissaoByIdempotency(key: string): Promise<NfseEmissao | undefined>;
+  getNfseEmissaoByInvoiceId(invoiceId: string): Promise<NfseEmissao | undefined>;
   getPendingNfseEmissoes(): Promise<NfseEmissao[]>;
+  updateNfseEmissao(id: string, data: Partial<InsertNfseEmissao>): Promise<NfseEmissao | undefined>;
+
+  // System Contracts
+  getSystemContracts(): Promise<SystemContract[]>;
+  getSystemContract(id: string): Promise<SystemContract | undefined>;
+  createSystemContract(data: InsertSystemContract): Promise<SystemContract>;
+  updateSystemContract(id: string, data: Partial<InsertSystemContract>): Promise<SystemContract | undefined>;
+  deleteSystemContract(id: string): Promise<void>;
 
   // System Logs
   createSystemLog(data: InsertSystemLog): Promise<SystemLog>;
-  getSystemLogs(limit?: number): Promise<SystemLog[]>;
-  clearSystemLogs(): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -142,127 +166,211 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async getLandlords(): Promise<Landlord[]> {
-    return db.select().from(landlords).orderBy(desc(landlords.createdAt));
+  // Companies
+  async getCompanies(): Promise<Company[]> {
+    return db.select().from(companies).orderBy(desc(companies.createdAt));
   }
 
-  async getLandlord(id: string): Promise<Landlord | undefined> {
-    const [landlord] = await db.select().from(landlords).where(eq(landlords.id, id));
-    return landlord || undefined;
+  async getCompany(id: string): Promise<Company | undefined> {
+    const [company] = await db.select().from(companies).where(eq(companies.id, id));
+    return company || undefined;
   }
 
-  async createLandlord(data: InsertLandlord): Promise<Landlord> {
-    const [landlord] = await db.insert(landlords).values(data).returning();
-    return landlord;
+  async createCompany(data: InsertCompany): Promise<Company> {
+    const [company] = await db.insert(companies).values(data).returning();
+    return company;
   }
 
-  async updateLandlord(id: string, data: Partial<InsertLandlord>): Promise<Landlord | undefined> {
-    const [landlord] = await db.update(landlords).set(data).where(eq(landlords.id, id)).returning();
-    return landlord || undefined;
+  async updateCompany(id: string, data: Partial<InsertCompany>): Promise<Company | undefined> {
+    const [company] = await db.update(companies).set(data).where(eq(companies.id, id)).returning();
+    return company || undefined;
   }
 
-  async deleteLandlord(id: string): Promise<void> {
-    await db.delete(landlords).where(eq(landlords.id, id));
+  async deleteCompany(id: string): Promise<void> {
+    await db.delete(companies).where(eq(companies.id, id));
   }
 
-  async getTenants(): Promise<Tenant[]> {
-    return db.select().from(tenants).orderBy(desc(tenants.createdAt));
+  // Clients
+  async getClients(): Promise<Client[]> {
+    return db.select().from(clients).orderBy(desc(clients.createdAt));
   }
 
-  async getTenant(id: string): Promise<Tenant | undefined> {
-    const [tenant] = await db.select().from(tenants).where(eq(tenants.id, id));
-    return tenant || undefined;
+  async getClient(id: string): Promise<Client | undefined> {
+    const [client] = await db.select().from(clients).where(eq(clients.id, id));
+    return client || undefined;
   }
 
-  async createTenant(data: InsertTenant): Promise<Tenant> {
-    const [tenant] = await db.insert(tenants).values(data).returning();
-    return tenant;
+  async createClient(data: InsertClient): Promise<Client> {
+    const [client] = await db.insert(clients).values(data).returning();
+    return client;
   }
 
-  async updateTenant(id: string, data: Partial<InsertTenant>): Promise<Tenant | undefined> {
-    const [tenant] = await db.update(tenants).set(data).where(eq(tenants.id, id)).returning();
-    return tenant || undefined;
+  async updateClient(id: string, data: Partial<InsertClient>): Promise<Client | undefined> {
+    const [client] = await db.update(clients).set(data).where(eq(clients.id, id)).returning();
+    return client || undefined;
   }
 
-  async deleteTenant(id: string): Promise<void> {
-    await db.delete(tenants).where(eq(tenants.id, id));
+  async deleteClient(id: string): Promise<void> {
+    await db.delete(clients).where(eq(clients.id, id));
   }
 
-  async getGuarantors(): Promise<Guarantor[]> {
-    return db.select().from(guarantors).orderBy(desc(guarantors.createdAt));
+  // Analysts
+  async getAnalysts(): Promise<Analyst[]> {
+    return db.select().from(analysts).orderBy(desc(analysts.createdAt));
   }
 
-  async getGuarantor(id: string): Promise<Guarantor | undefined> {
-    const [guarantor] = await db.select().from(guarantors).where(eq(guarantors.id, id));
-    return guarantor || undefined;
+  async getAnalyst(id: string): Promise<Analyst | undefined> {
+    const [analyst] = await db.select().from(analysts).where(eq(analysts.id, id));
+    return analyst || undefined;
   }
 
-  async createGuarantor(data: InsertGuarantor): Promise<Guarantor> {
-    const [guarantor] = await db.insert(guarantors).values(data).returning();
-    return guarantor;
+  async createAnalyst(data: InsertAnalyst): Promise<Analyst> {
+    const [analyst] = await db.insert(analysts).values(data).returning();
+    return analyst;
   }
 
-  async updateGuarantor(id: string, data: Partial<InsertGuarantor>): Promise<Guarantor | undefined> {
-    const [guarantor] = await db.update(guarantors).set(data).where(eq(guarantors.id, id)).returning();
-    return guarantor || undefined;
+  async updateAnalyst(id: string, data: Partial<InsertAnalyst>): Promise<Analyst | undefined> {
+    const [analyst] = await db.update(analysts).set(data).where(eq(analysts.id, id)).returning();
+    return analyst || undefined;
   }
 
-  async deleteGuarantor(id: string): Promise<void> {
-    await db.delete(guarantors).where(eq(guarantors.id, id));
+  async deleteAnalyst(id: string): Promise<void> {
+    await db.delete(analysts).where(eq(analysts.id, id));
   }
 
-  async getServiceProviders(): Promise<ServiceProvider[]> {
-    return db.select().from(serviceProviders).orderBy(desc(serviceProviders.createdAt));
+  // Partners
+  async getPartners(): Promise<Partner[]> {
+    return db.select().from(partners).orderBy(desc(partners.createdAt));
   }
 
-  async getServiceProvider(id: string): Promise<ServiceProvider | undefined> {
-    const [provider] = await db.select().from(serviceProviders).where(eq(serviceProviders.id, id));
-    return provider || undefined;
+  async getPartner(id: string): Promise<Partner | undefined> {
+    const [partner] = await db.select().from(partners).where(eq(partners.id, id));
+    return partner || undefined;
   }
 
-  async createServiceProvider(data: InsertServiceProvider): Promise<ServiceProvider> {
-    const [provider] = await db.insert(serviceProviders).values(data).returning();
-    return provider;
+  async createPartner(data: InsertPartner): Promise<Partner> {
+    const [partner] = await db.insert(partners).values(data).returning();
+    return partner;
   }
 
-  async updateServiceProvider(id: string, data: Partial<InsertServiceProvider>): Promise<ServiceProvider | undefined> {
-    const [provider] = await db.update(serviceProviders).set(data).where(eq(serviceProviders.id, id)).returning();
-    return provider || undefined;
+  async updatePartner(id: string, data: Partial<InsertPartner>): Promise<Partner | undefined> {
+    const [partner] = await db.update(partners).set(data).where(eq(partners.id, id)).returning();
+    return partner || undefined;
   }
 
-  async deleteServiceProvider(id: string): Promise<void> {
-    await db.delete(serviceProviders).where(eq(serviceProviders.id, id));
+  async deletePartner(id: string): Promise<void> {
+    await db.delete(partners).where(eq(partners.id, id));
   }
 
-  async getProperties(): Promise<Property[]> {
-    return db.select().from(properties).orderBy(desc(properties.createdAt));
+  // Projects
+  async getProjects(): Promise<Project[]> {
+    return db.select().from(projects).orderBy(desc(projects.createdAt));
   }
 
-  async getProperty(id: string): Promise<Property | undefined> {
-    const [property] = await db.select().from(properties).where(eq(properties.id, id));
-    return property || undefined;
+  async getProject(id: string): Promise<Project | undefined> {
+    const [project] = await db.select().from(projects).where(eq(projects.id, id));
+    return project || undefined;
   }
 
-  async createProperty(data: InsertProperty): Promise<Property> {
-    const [property] = await db.insert(properties).values(data).returning();
-    return property;
+  async createProject(data: InsertProject): Promise<Project> {
+    const [project] = await db.insert(projects).values(data).returning();
+    return project;
   }
 
-  async updateProperty(id: string, data: Partial<InsertProperty>): Promise<Property | undefined> {
-    const [property] = await db.update(properties).set(data).where(eq(properties.id, id)).returning();
-    return property || undefined;
+  async updateProject(id: string, data: Partial<InsertProject>): Promise<Project | undefined> {
+    const [project] = await db.update(projects).set(data).where(eq(projects.id, id)).returning();
+    return project || undefined;
   }
 
-  async deleteProperty(id: string): Promise<void> {
-    await db.delete(properties).where(eq(properties.id, id));
+  async deleteProject(id: string): Promise<void> {
+    await db.delete(projectAnalysts).where(eq(projectAnalysts.projectId, id)); // Clean up relations first
+    await db.delete(projects).where(eq(projects.id, id));
   }
 
+  // Project Analysts
+  async getProjectAnalysts(projectId: string): Promise<(ProjectAnalyst & { analyst: Analyst })[]> {
+    const result = await db
+      .select({
+        projectAnalyst: projectAnalysts,
+        analyst: analysts,
+      })
+      .from(projectAnalysts)
+      .innerJoin(analysts, eq(projectAnalysts.analystId, analysts.id))
+      .where(eq(projectAnalysts.projectId, projectId));
+    
+    return result.map(({ projectAnalyst, analyst }) => ({
+      ...projectAnalyst,
+      analyst,
+    }));
+  }
+
+  async addProjectAnalyst(data: InsertProjectAnalyst): Promise<ProjectAnalyst> {
+    const [relation] = await db.insert(projectAnalysts).values(data).returning();
+    return relation;
+  }
+
+  async updateProjectAnalyst(id: string, data: Partial<InsertProjectAnalyst>): Promise<ProjectAnalyst | undefined> {
+    const [relation] = await db.update(projectAnalysts).set(data).where(eq(projectAnalysts.id, id)).returning();
+    return relation || undefined;
+  }
+
+  async removeProjectAnalyst(id: string): Promise<void> {
+    await db.delete(projectAnalysts).where(eq(projectAnalysts.id, id));
+  }
+
+  // Project Partners
+  async getProjectPartners(projectId: string): Promise<(ProjectPartner & { partner: Partner })[]> {
+    const result = await db
+      .select({
+        projectPartner: projectPartners,
+        partner: partners,
+      })
+      .from(projectPartners)
+      .innerJoin(partners, eq(projectPartners.partnerId, partners.id))
+      .where(eq(projectPartners.projectId, projectId));
+    
+    return result.map(({ projectPartner, partner }) => ({
+      ...projectPartner,
+      partner,
+    }));
+  }
+
+  async addProjectPartner(data: InsertProjectPartner): Promise<ProjectPartner> {
+    const [relation] = await db.insert(projectPartners).values(data).returning();
+    return relation;
+  }
+
+  async removeProjectPartner(id: string): Promise<void> {
+    await db.delete(projectPartners).where(eq(projectPartners.id, id));
+  }
+
+  // Service Catalog
+  async getServiceCatalog(): Promise<ServiceCatalog[]> {
+    return db.select().from(serviceCatalog).orderBy(desc(serviceCatalog.createdAt));
+  }
+
+  async getServiceCatalogItem(id: string): Promise<ServiceCatalog | undefined> {
+    const [item] = await db.select().from(serviceCatalog).where(eq(serviceCatalog.id, id));
+    return item || undefined;
+  }
+
+  async createServiceCatalogItem(data: InsertServiceCatalog): Promise<ServiceCatalog> {
+    const [item] = await db.insert(serviceCatalog).values(data).returning();
+    return item;
+  }
+
+  async updateServiceCatalogItem(id: string, data: Partial<InsertServiceCatalog>): Promise<ServiceCatalog | undefined> {
+    const [item] = await db.update(serviceCatalog).set(data).where(eq(serviceCatalog.id, id)).returning();
+    return item || undefined;
+  }
+
+  async deleteServiceCatalogItem(id: string): Promise<void> {
+    await db.delete(serviceCatalog).where(eq(serviceCatalog.id, id));
+  }
+
+  // Contracts
   async getContracts(): Promise<Contract[]> {
     return db.select().from(contracts).orderBy(desc(contracts.createdAt));
-  }
-
-  async getActiveContracts(): Promise<Contract[]> {
-    return db.select().from(contracts).where(eq(contracts.status, "active")).orderBy(desc(contracts.createdAt));
   }
 
   async getContract(id: string): Promise<Contract | undefined> {
@@ -272,10 +380,6 @@ export class DatabaseStorage implements IStorage {
 
   async createContract(data: InsertContract): Promise<Contract> {
     const [contract] = await db.insert(contracts).values(data).returning();
-    await db
-      .update(properties)
-      .set({ status: "rented" })
-      .where(eq(properties.id, data.propertyId));
     return contract;
   }
 
@@ -288,43 +392,42 @@ export class DatabaseStorage implements IStorage {
     await db.delete(contracts).where(eq(contracts.id, id));
   }
 
-  async getServices(): Promise<Service[]> {
-    return db.select().from(services).orderBy(desc(services.createdAt));
+  // Contract Items
+  async getContractItems(contractId: string): Promise<ContractItem[]> {
+    return db.select().from(contractItems).where(eq(contractItems.contractId, contractId));
   }
 
-  async getServicesByContractAndRef(contractId: string, year: number, month: number): Promise<Service[]> {
-    return db.select().from(services).where(
-      and(eq(services.contractId, contractId), eq(services.refYear, year), eq(services.refMonth, month))
+  async getContractItemsByRef(contractId: string, year: number, month: number): Promise<ContractItem[]> {
+    return db.select().from(contractItems).where(
+      and(
+        eq(contractItems.contractId, contractId),
+        eq(contractItems.refYear, year),
+        eq(contractItems.refMonth, month)
+      )
     );
   }
 
-  async getService(id: string): Promise<Service | undefined> {
-    const [service] = await db.select().from(services).where(eq(services.id, id));
-    return service || undefined;
+  async createContractItem(data: InsertContractItem): Promise<ContractItem> {
+    const [item] = await db.insert(contractItems).values(data).returning();
+    return item;
   }
 
-  async createService(data: InsertService): Promise<Service> {
-    const [service] = await db.insert(services).values(data).returning();
-    return service;
+  async updateContractItem(id: string, data: Partial<InsertContractItem>): Promise<ContractItem | undefined> {
+    const [item] = await db.update(contractItems).set(data).where(eq(contractItems.id, id)).returning();
+    return item || undefined;
   }
 
-  async updateService(id: string, data: Partial<InsertService>): Promise<Service | undefined> {
-    const [service] = await db.update(services).set(data).where(eq(services.id, id)).returning();
-    return service || undefined;
+  async deleteContractItem(id: string): Promise<void> {
+    await db.delete(contractItems).where(eq(contractItems.id, id));
   }
 
-  async deleteService(id: string): Promise<void> {
-    await db.delete(services).where(eq(services.id, id));
-  }
-
+  // Receipts
   async getReceipts(): Promise<Receipt[]> {
     return db.select().from(receipts).orderBy(desc(receipts.createdAt));
   }
 
   async getReceiptsByRef(year: number, month: number): Promise<Receipt[]> {
-    return db.select().from(receipts).where(
-      and(eq(receipts.refYear, year), eq(receipts.refMonth, month))
-    ).orderBy(desc(receipts.createdAt));
+    return db.select().from(receipts).where(and(eq(receipts.refYear, year), eq(receipts.refMonth, month)));
   }
 
   async getReceipt(id: string): Promise<Receipt | undefined> {
@@ -334,7 +437,33 @@ export class DatabaseStorage implements IStorage {
 
   async getReceiptByContractAndRef(contractId: string, year: number, month: number): Promise<Receipt | undefined> {
     const [receipt] = await db.select().from(receipts).where(
-      and(eq(receipts.contractId, contractId), eq(receipts.refYear, year), eq(receipts.refMonth, month))
+      and(
+        eq(receipts.contractId, contractId),
+        eq(receipts.refYear, year),
+        eq(receipts.refMonth, month)
+      )
+    );
+    return receipt || undefined;
+  }
+
+  async getReceiptByProjectAndRef(projectId: string, year: number, month: number): Promise<Receipt | undefined> {
+    const [receipt] = await db.select().from(receipts).where(
+      and(
+        eq(receipts.projectId, projectId),
+        eq(receipts.refYear, year),
+        eq(receipts.refMonth, month)
+      )
+    );
+    return receipt || undefined;
+  }
+
+  async getReceiptBySystemContractAndRef(systemContractId: string, year: number, month: number): Promise<Receipt | undefined> {
+    const [receipt] = await db.select().from(receipts).where(
+      and(
+        eq(receipts.systemContractId, systemContractId),
+        eq(receipts.refYear, year),
+        eq(receipts.refMonth, month)
+      )
     );
     return receipt || undefined;
   }
@@ -349,75 +478,70 @@ export class DatabaseStorage implements IStorage {
     return receipt || undefined;
   }
 
+  async deleteReceipt(id: string): Promise<void> {
+    // Delete related records first
+    await db.delete(cashTransactions).where(eq(cashTransactions.receiptId, id));
+    await db.delete(invoices).where(eq(invoices.receiptId, id));
+    await db.delete(timesheetEntries).where(eq(timesheetEntries.receiptId, id));
+    await db.delete(receipts).where(eq(receipts.id, id));
+  }
+
   async deleteDraftReceiptsByContractId(contractId: string): Promise<void> {
-    // Get IDs of draft receipts to be deleted
-    const draftReceipts = await db.select({ id: receipts.id })
+    const receiptsToDelete = await db
+      .select({ id: receipts.id })
       .from(receipts)
-      .where(
-        and(
-          eq(receipts.contractId, contractId),
-          eq(receipts.status, "draft")
-        )
-      );
-
-    const initialReceiptIds = draftReceipts.map(r => r.id);
-
-    if (initialReceiptIds.length === 0) return;
-
-    // 1. Check for blocking conditions
-    
-    // Check for Issued Invoices
-    const receiptsWithIssuedInvoices = await db.select({ id: invoices.receiptId })
-      .from(invoices)
-      .where(
-        and(
-          inArray(invoices.receiptId, initialReceiptIds),
-          eq(invoices.status, "issued")
-        )
-      );
-    const blockedByInvoice = new Set(receiptsWithIssuedInvoices.map(r => r.id));
-
-    // Check for Paid/Reversed Transfers
-    const receiptsWithPaidTransfers = await db.select({ id: landlordTransfers.receiptId })
-      .from(landlordTransfers)
-      .where(
-        and(
-          inArray(landlordTransfers.receiptId, initialReceiptIds),
-          inArray(landlordTransfers.status, ["paid", "reversed"])
-        )
-      );
-    const blockedByTransfer = new Set(receiptsWithPaidTransfers.map(r => r.id));
-
-    // Filter receipts that are safe to delete
-    const receiptsToDelete = initialReceiptIds.filter(id => 
-      !blockedByInvoice.has(id) && !blockedByTransfer.has(id)
-    );
+      .where(and(eq(receipts.contractId, contractId), eq(receipts.status, "draft")));
 
     if (receiptsToDelete.length === 0) return;
 
-    // 2. Execute cascade deletions for safe receipts
-
-    // Delete linked invoices (all non-issued ones linked to these receipts)
-    await db.delete(invoices).where(
-      inArray(invoices.receiptId, receiptsToDelete)
-    );
-
-    // Delete linked landlord transfers (pending/failed)
-    await db.delete(landlordTransfers).where(
-      inArray(landlordTransfers.receiptId, receiptsToDelete)
-    );
-
-    // Delete linked cash transactions
-    await db.delete(cashTransactions).where(
-      inArray(cashTransactions.receiptId, receiptsToDelete)
-    );
-
-    // Delete the receipts
-    await db.delete(receipts).where(
-      inArray(receipts.id, receiptsToDelete)
-    );
+    const ids = receiptsToDelete.map(r => r.id);
+    await db.delete(cashTransactions).where(inArray(cashTransactions.receiptId, ids));
+    await db.delete(invoices).where(inArray(invoices.receiptId, ids));
+    await db.delete(timesheetEntries).where(inArray(timesheetEntries.receiptId, ids));
+    await db.delete(receipts).where(inArray(receipts.id, ids));
   }
 
+  // Timesheet Entries
+  async getTimesheetEntries(receiptId: string): Promise<(TimesheetEntry & { analyst?: Analyst, partner?: Partner })[]> {
+    const result = await db
+      .select({
+        entry: timesheetEntries,
+        analyst: analysts,
+        partner: partners,
+      })
+      .from(timesheetEntries)
+      .leftJoin(analysts, eq(timesheetEntries.analystId, analysts.id))
+      .leftJoin(partners, eq(timesheetEntries.partnerId, partners.id))
+      .where(eq(timesheetEntries.receiptId, receiptId))
+      .orderBy(desc(timesheetEntries.createdAt));
+      
+    return result.map(({ entry, analyst, partner }) => ({
+      ...entry,
+      analyst: analyst || undefined,
+      partner: partner || undefined,
+    }));
+  }
+
+  async getTimesheetEntry(id: string): Promise<TimesheetEntry | undefined> {
+    const [entry] = await db.select().from(timesheetEntries).where(eq(timesheetEntries.id, id));
+    return entry || undefined;
+  }
+
+  async createTimesheetEntry(data: InsertTimesheetEntry): Promise<TimesheetEntry> {
+    const [entry] = await db.insert(timesheetEntries).values(data).returning();
+    return entry;
+  }
+
+  async updateTimesheetEntry(id: string, data: Partial<InsertTimesheetEntry>): Promise<TimesheetEntry> {
+    const [entry] = await db.update(timesheetEntries).set(data).where(eq(timesheetEntries.id, id)).returning();
+    return entry;
+  }
+
+  async deleteTimesheetEntry(id: string): Promise<void> {
+    await db.delete(timesheetEntries).where(eq(timesheetEntries.id, id));
+  }
+
+  // Cash Transactions
   async getCashTransactions(): Promise<CashTransaction[]> {
     return db.select().from(cashTransactions).orderBy(desc(cashTransactions.date));
   }
@@ -450,94 +574,28 @@ export class DatabaseStorage implements IStorage {
     );
   }
 
-  async getLandlordTransfers(): Promise<LandlordTransfer[]> {
-    return db.select().from(landlordTransfers).orderBy(desc(landlordTransfers.createdAt));
-  }
-
-  async getLandlordTransfer(id: string): Promise<LandlordTransfer | undefined> {
-    const [transfer] = await db.select().from(landlordTransfers).where(eq(landlordTransfers.id, id));
-    return transfer || undefined;
-  }
-
-  async getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<LandlordTransfer[]> {
-    if (type === "ref") {
-      // Join with receipts to filter by refYear and refMonth
-      const result = await db
-        .select({
-          transfer: landlordTransfers,
-        })
-        .from(landlordTransfers)
-        .innerJoin(receipts, eq(landlordTransfers.receiptId, receipts.id))
-        .where(and(eq(receipts.refYear, year), eq(receipts.refMonth, month)));
-      
-      return result.map(r => r.transfer);
-    } else {
-      // Filter by paidAt date
-      const startDate = new Date(year, month - 1, 1);
-      const endDate = new Date(year, month, 0, 23, 59, 59, 999);
-      
-      return db
-        .select()
-        .from(landlordTransfers)
-        .where(and(
-          gte(landlordTransfers.paidAt, startDate),
-          lte(landlordTransfers.paidAt, endDate)
-        ))
-        .orderBy(desc(landlordTransfers.paidAt));
-    }
-  }
-
-  async getRevenueReport(year: number, month: number): Promise<RevenueReportItem[]> {
-    const result = await db
-      .select({
-        receiptId: receipts.id,
-        propertyCode: properties.code,
-        landlordName: landlords.name,
-        tenantName: tenants.name,
-        refYear: receipts.refYear,
-        refMonth: receipts.refMonth,
-        rentAmount: receipts.rentAmount,
-        adminFeeAmount: receipts.adminFeeAmount,
-        transferAmount: landlordTransfers.amount,
-        status: receipts.status,
-      })
-      .from(receipts)
-      .leftJoin(contracts, eq(receipts.contractId, contracts.id))
-      .leftJoin(properties, eq(contracts.propertyId, properties.id))
-      .leftJoin(landlords, eq(contracts.landlordId, landlords.id))
-      .leftJoin(tenants, eq(contracts.tenantId, tenants.id))
-      .leftJoin(landlordTransfers, eq(receipts.id, landlordTransfers.receiptId))
-      .where(and(
-        eq(receipts.refYear, year),
-        eq(receipts.refMonth, month),
-        inArray(receipts.status, ["paid", "transferred"])
-      ))
-      .orderBy(properties.code);
-
-    return result;
-  }
-
-  async createLandlordTransfer(data: InsertLandlordTransfer): Promise<LandlordTransfer> {
-    const [transfer] = await db.insert(landlordTransfers).values(data).returning();
-    return transfer;
-  }
-
-  async updateLandlordTransfer(id: string, data: Partial<InsertLandlordTransfer>): Promise<LandlordTransfer | undefined> {
-    const [transfer] = await db.update(landlordTransfers).set(data).where(eq(landlordTransfers.id, id)).returning();
-    return transfer || undefined;
-  }
-
-  async deleteLandlordTransfer(id: string): Promise<void> {
-    await db.delete(landlordTransfers).where(eq(landlordTransfers.id, id));
-  }
-
+  // Invoices
   async getInvoices(): Promise<Invoice[]> {
     return db.select().from(invoices).orderBy(desc(invoices.createdAt));
+  }
+
+  async getInvoicesByReceiptId(receiptId: string): Promise<Invoice[]> {
+    return db.select().from(invoices).where(eq(invoices.receiptId, receiptId));
   }
 
   async getInvoice(id: string): Promise<Invoice | undefined> {
     const [invoice] = await db.select().from(invoices).where(eq(invoices.id, id));
     return invoice || undefined;
+  }
+
+  async getNfseEmissaoByInvoiceId(invoiceId: string): Promise<NfseEmissao | undefined> {
+    const [emissao] = await db.select().from(nfseEmissoes)
+      .where(and(
+        eq(nfseEmissoes.origemId, invoiceId),
+        eq(nfseEmissoes.origemTipo, "INVOICE")
+      ))
+      .orderBy(desc(nfseEmissoes.createdAt));
+    return emissao || undefined;
   }
 
   async createInvoice(data: InsertInvoice): Promise<Invoice> {
@@ -554,44 +612,45 @@ export class DatabaseStorage implements IStorage {
     await db.delete(invoices).where(eq(invoices.id, id));
   }
 
-  // NFS-e methods
-  async getNfseConfig(): Promise<NfseConfig | undefined> {
-    const [config] = await db.select().from(nfseConfig).limit(1);
-    return config || undefined;
-  }
-
-  async createNfseConfig(data: InsertNfseConfig): Promise<NfseConfig> {
-    const [config] = await db.insert(nfseConfig).values(data).returning();
-    return config;
-  }
-
-  async updateNfseConfig(id: string, data: Partial<InsertNfseConfig>): Promise<NfseConfig | undefined> {
-    const [config] = await db.update(nfseConfig).set(data).where(eq(nfseConfig.id, id)).returning();
+  // NFS-e Config
+  async getNfseConfig(companyId?: string): Promise<NfseConfig | undefined> {
+    if (companyId) {
+      const [config] = await db.select().from(nfseConfigs).where(eq(nfseConfigs.companyId, companyId)).limit(1);
+      return config || undefined;
+    }
+    const [config] = await db.select().from(nfseConfigs).where(isNull(nfseConfigs.companyId)).limit(1);
     return config || undefined;
   }
 
   async upsertNfseConfig(data: InsertNfseConfig): Promise<NfseConfig> {
-    const existing = await this.getNfseConfig();
+    const existing = await this.getNfseConfig(data.companyId || undefined);
+    
     if (existing) {
-      const [config] = await db.update(nfseConfig).set(data).where(eq(nfseConfig.id, existing.id)).returning();
-      return config;
-    } else {
-      return this.createNfseConfig(data);
+      const [updated] = await db
+        .update(nfseConfigs)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(nfseConfigs.id, existing.id))
+        .returning();
+      return updated;
     }
+    
+    const [created] = await db.insert(nfseConfigs).values(data).returning();
+    return created;
   }
 
+  // NFS-e Lotes & Emissões
   async createNfseLote(data: InsertNfseLote): Promise<NfseLote> {
     const [lote] = await db.insert(nfseLotes).values(data).returning();
     return lote;
   }
 
-  async getNfseLote(id: string): Promise<NfseLote | undefined> {
-    const [lote] = await db.select().from(nfseLotes).where(eq(nfseLotes.id, id));
+  async updateNfseLote(id: string, data: Partial<InsertNfseLote>): Promise<NfseLote | undefined> {
+    const [lote] = await db.update(nfseLotes).set(data).where(eq(nfseLotes.id, id)).returning();
     return lote || undefined;
   }
 
-  async updateNfseLote(id: string, data: Partial<InsertNfseLote>): Promise<NfseLote | undefined> {
-    const [lote] = await db.update(nfseLotes).set(data).where(eq(nfseLotes.id, id)).returning();
+  async getNfseLote(id: string): Promise<NfseLote | undefined> {
+    const [lote] = await db.select().from(nfseLotes).where(eq(nfseLotes.id, id));
     return lote || undefined;
   }
 
@@ -609,27 +668,38 @@ export class DatabaseStorage implements IStorage {
     return emissao || undefined;
   }
 
-  async getNfseEmissoesByLote(loteId: string): Promise<NfseEmissao[]> {
-    return db.select().from(nfseEmissoes).where(eq(nfseEmissoes.loteId, loteId)).orderBy(desc(nfseEmissoes.createdAt));
+
+  async getPendingNfseEmissoes(): Promise<NfseEmissao[]> {
+    return db.select().from(nfseEmissoes).where(eq(nfseEmissoes.status, "PENDENTE"));
   }
 
   async updateNfseEmissao(id: string, data: Partial<InsertNfseEmissao>): Promise<NfseEmissao | undefined> {
-    const [emissao] = await db.update(nfseEmissoes).set(data).where(eq(nfseEmissoes.id, id)).returning();
+    const [emissao] = await db.update(nfseEmissoes).set({ ...data, updatedAt: new Date() }).where(eq(nfseEmissoes.id, id)).returning();
     return emissao || undefined;
   }
 
-  async getNfseEmissaoByIdempotency(key: string): Promise<NfseEmissao | undefined> {
-    const [emissao] = await db.select().from(nfseEmissoes).where(eq(nfseEmissoes.idempotencyKey, key));
-    return emissao || undefined;
+  // System Contracts
+  async getSystemContracts(): Promise<SystemContract[]> {
+    return db.select().from(systemContracts).orderBy(desc(systemContracts.createdAt));
   }
 
-  async getPendingNfseEmissoes(): Promise<NfseEmissao[]> {
-    return db.select().from(nfseEmissoes).where(
-      and(
-        inArray(nfseEmissoes.status, ['PENDENTE', 'FALHOU']),
-        lte(nfseEmissoes.retryCount, 3)
-      )
-    );
+  async getSystemContract(id: string): Promise<SystemContract | undefined> {
+    const [contract] = await db.select().from(systemContracts).where(eq(systemContracts.id, id));
+    return contract || undefined;
+  }
+
+  async createSystemContract(data: InsertSystemContract): Promise<SystemContract> {
+    const [contract] = await db.insert(systemContracts).values(data).returning();
+    return contract;
+  }
+
+  async updateSystemContract(id: string, data: Partial<InsertSystemContract>): Promise<SystemContract | undefined> {
+    const [contract] = await db.update(systemContracts).set(data).where(eq(systemContracts.id, id)).returning();
+    return contract || undefined;
+  }
+
+  async deleteSystemContract(id: string): Promise<void> {
+    await db.delete(systemContracts).where(eq(systemContracts.id, id));
   }
 
   // System Logs
@@ -638,8 +708,8 @@ export class DatabaseStorage implements IStorage {
     return log;
   }
 
-  async getSystemLogs(limit: number = 100): Promise<SystemLog[]> {
-    return db.select().from(systemLogs).orderBy(desc(systemLogs.timestamp)).limit(limit);
+  async getSystemLogs(): Promise<SystemLog[]> {
+    return db.select().from(systemLogs).orderBy(desc(systemLogs.createdAt));
   }
 
   async clearSystemLogs(): Promise<void> {
