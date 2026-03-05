@@ -9,12 +9,20 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2, Briefcase, Search, Users, X, Check, Banknote } from "lucide-react";
+import { Plus, Pencil, Trash2, Briefcase, Search, Users, X, Check, Banknote, Play, Pause, XCircle, MoreVertical } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, Controller } from "react-hook-form";
 import { insertProjectSchema, type Project, type InsertProject, type Company, type Client, type Partner, type Analyst, type ProjectAnalyst, type ServiceCatalog } from "@shared/schema";
@@ -343,7 +351,37 @@ export default function ProjectsPage({ mode = "client" }: { mode?: "client" | "p
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
-      toast({ title: "Sucesso", description: "Projeto excluído com sucesso." });
+      toast({
+        title: "Sucesso",
+        description: "Projeto excluído com sucesso",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Erro",
+        description: "Erro ao excluir projeto",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      await apiRequest("PATCH", `/api/projects/${id}`, { status });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      toast({
+        title: "Sucesso",
+        description: "Status do projeto atualizado com sucesso",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Erro",
+        description: "Erro ao atualizar status do projeto",
+        variant: "destructive",
+      });
     },
   });
 
@@ -435,12 +473,15 @@ export default function ProjectsPage({ mode = "client" }: { mode?: "client" | "p
               Novo Projeto
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
+          <DialogContent className="max-w-4xl h-[90vh] flex flex-col p-0">
+            <DialogHeader className="px-6 py-4 border-b">
               <DialogTitle>{editingProject ? "Editar Projeto" : "Novo Projeto"}</DialogTitle>
             </DialogHeader>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-              <div className="flex items-center space-x-6">
+            <ScrollArea className="flex-1 px-6 py-4">
+            <form id="project-form" onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+              
+              {/* Configurações Gerais */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 border rounded-lg bg-muted/20">
                 <div className="flex items-center space-x-2">
                   <Controller
                     control={form.control}
@@ -467,69 +508,24 @@ export default function ProjectsPage({ mode = "client" }: { mode?: "client" | "p
                       />
                     )}
                   />
-                  <Label htmlFor="isBillable">Fatura?</Label>
+                  <Label htmlFor="isBillable">Gera Fatura?</Label>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="dayDue">Dia de Vencimento</Label>
+                  <Input 
+                    id="dayDue" 
+                    type="number"
+                    min="1"
+                    max="31"
+                    className="h-8"
+                    placeholder="Dia (1-31)"
+                    {...form.register("dayDue", { valueAsNumber: true })} 
+                  />
                 </div>
               </div>
-              <div className="space-y-2 col-span-2">
-                <Label htmlFor="billingEmails">Emails para Cobrança</Label>
-                <Input 
-                  id="billingEmails" 
-                  placeholder="email1@empresa.com, email2@empresa.com" 
-                  {...form.register("billingEmails")} 
-                />
-                <p className="text-[0.8rem] text-muted-foreground">
-                  Separe múltiplos emails com vírgula. Se vazio, será usado o email do cliente/parceiro.
-                </p>
-              </div>
 
-              <div className="space-y-2 col-span-2">
-                <Label htmlFor="responsibleContact">Contato Responsável</Label>
-                <Input 
-                  id="responsibleContact" 
-                  placeholder="Nome do contato responsável no cliente" 
-                  {...form.register("responsibleContact")} 
-                />
-              </div>
-
-              <div className="space-y-2 col-span-2">
-                <Label htmlFor="dayDue">Dia de Vencimento</Label>
-                <Input 
-                  id="dayDue" 
-                  type="number"
-                  min="1"
-                  max="31"
-                  placeholder="Dia de vencimento (1-31)"
-                  {...form.register("dayDue", { valueAsNumber: true })} 
-                />
-                <p className="text-[0.8rem] text-muted-foreground">
-                  Usado para calcular a data de vencimento nas cobranças.
-                </p>
-              </div>
-
-              <div className="space-y-2 col-span-2">
-                <Label htmlFor="serviceCatalogId">Serviço do Catálogo (Descrição no Email)</Label>
-                <Controller
-                  control={form.control}
-                  name="serviceCatalogId"
-                  render={({ field }) => (
-                    <Select onValueChange={field.onChange} value={field.value || ""}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Selecione um serviço..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {serviceCatalog?.map((s) => (
-                          <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-                <p className="text-[0.8rem] text-muted-foreground">
-                  A descrição deste serviço será usada no email de cobrança (substituindo "serviços prestados").
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
+              {/* Informações Básicas */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="name">Nome do Projeto</Label>
                   <Input id="name" {...form.register("name")} />
@@ -555,31 +551,38 @@ export default function ProjectsPage({ mode = "client" }: { mode?: "client" | "p
                   />
                   {form.formState.errors.companyId && <p className="text-sm text-red-500">{form.formState.errors.companyId.message}</p>}
                 </div>
+              </div>
+
+              {/* Tipo e Vínculos */}
+              <div className="space-y-4 border rounded-lg p-4">
+                <h3 className="font-semibold text-sm text-muted-foreground mb-2">Configuração do Cliente/Parceiro</h3>
+                
                 {!mode && (
-                <div className="space-y-2 col-span-2">
-                  <Label>Tipo de Cliente</Label>
-                  <Controller
-                    control={form.control}
-                    name="clientType"
-                    render={({ field }) => (
-                      <RadioGroup
-                        onValueChange={field.onChange}
-                        value={field.value}
-                        className="flex flex-row space-x-4"
-                      >
-                        <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="client" id="r1" />
-                          <Label htmlFor="r1">Cliente</Label>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="partner" id="r2" />
-                          <Label htmlFor="r2">Parceiro</Label>
-                        </div>
-                      </RadioGroup>
-                    )}
-                  />
-                </div>
+                  <div className="space-y-2">
+                    <Label>Tipo de Relacionamento</Label>
+                    <Controller
+                      control={form.control}
+                      name="clientType"
+                      render={({ field }) => (
+                        <RadioGroup
+                          onValueChange={field.onChange}
+                          value={field.value}
+                          className="flex flex-row space-x-4"
+                        >
+                          <div className="flex items-center space-x-2">
+                            <RadioGroupItem value="client" id="r1" />
+                            <Label htmlFor="r1">Cliente Direto</Label>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <RadioGroupItem value="partner" id="r2" />
+                            <Label htmlFor="r2">Parceiro</Label>
+                          </div>
+                        </RadioGroup>
+                      )}
+                    />
+                  </div>
                 )}
+
                 {form.watch("clientType") === "client" ? (
                   <div className="space-y-2" key="client-select-container">
                     <Label htmlFor="clientId">Cliente</Label>
@@ -589,7 +592,7 @@ export default function ProjectsPage({ mode = "client" }: { mode?: "client" | "p
                       render={({ field }) => (
                         <Select onValueChange={field.onChange} value={field.value || ""}>
                           <SelectTrigger>
-                            <SelectValue placeholder="Selecione..." />
+                            <SelectValue placeholder="Selecione o cliente..." />
                           </SelectTrigger>
                           <SelectContent>
                             {clients?.map((c) => (
@@ -605,9 +608,9 @@ export default function ProjectsPage({ mode = "client" }: { mode?: "client" | "p
                     {form.formState.errors.clientId && <p className="text-sm text-red-500">{form.formState.errors.clientId.message}</p>}
                   </div>
                 ) : (
-                  <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2" key="partner-select-container">
-                      <Label htmlFor="partnerId">Parceiro (Cliente)</Label>
+                      <Label htmlFor="partnerId">Parceiro (Cliente Final)</Label>
                       <Controller
                         control={form.control}
                         name="partnerId"
@@ -670,16 +673,20 @@ export default function ProjectsPage({ mode = "client" }: { mode?: "client" | "p
                       />
                     </div>
 
-                    <div className="col-span-2 p-3 bg-muted rounded-md border flex justify-between items-center">
+                    <div className="col-span-1 md:col-span-2 p-3 bg-muted rounded-md border flex justify-between items-center">
                       <span className="text-sm font-medium">Margem de Lucro Estimada:</span>
-                      <span className={`font-bold ${(parseFloat(form.watch("hourlyRate")?.toString() || "0") - parseFloat(form.watch("supplierHourlyRate")?.toString() || "0")) >= 0 ? "text-green-600" : "text-red-600"}`}>
+                      <span className={`font-bold text-lg ${(parseFloat(form.watch("hourlyRate")?.toString() || "0") - parseFloat(form.watch("supplierHourlyRate")?.toString() || "0")) >= 0 ? "text-green-600" : "text-red-600"}`}>
                         {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
                           (parseFloat(form.watch("hourlyRate")?.toString() || "0") - parseFloat(form.watch("supplierHourlyRate")?.toString() || "0"))
                         )}
                       </span>
                     </div>
-                  </>
+                  </div>
                 )}
+              </div>
+
+              {/* Datas e Detalhes */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="startDate">Data Início</Label>
                   <Input type="date" id="startDate" {...form.register("startDate")} />
@@ -690,14 +697,66 @@ export default function ProjectsPage({ mode = "client" }: { mode?: "client" | "p
                   <Input type="date" id="endDate" {...form.register("endDate")} value={form.watch("endDate") || ""} />
                 </div>
               </div>
+
+              {/* Cobrança e Contato */}
+              <div className="space-y-4 border-t pt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="serviceCatalogId">Serviço do Catálogo (Descrição no Email)</Label>
+                  <Controller
+                    control={form.control}
+                    name="serviceCatalogId"
+                    render={({ field }) => (
+                      <Select onValueChange={field.onChange} value={field.value || ""}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione um serviço..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {serviceCatalog?.map((s) => (
+                            <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                  <p className="text-[0.8rem] text-muted-foreground">
+                    A descrição deste serviço será usada no email de cobrança (substituindo "serviços prestados").
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="billingEmails">Emails para Cobrança</Label>
+                  <Input 
+                    id="billingEmails" 
+                    placeholder="email1@empresa.com, email2@empresa.com" 
+                    {...form.register("billingEmails")} 
+                  />
+                  <p className="text-[0.8rem] text-muted-foreground">
+                    Separe múltiplos emails com vírgula.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="responsibleContact">Contato Responsável</Label>
+                  <Input 
+                    id="responsibleContact" 
+                    placeholder="Nome do contato responsável no cliente" 
+                    {...form.register("responsibleContact")} 
+                  />
+                </div>
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="description">Descrição</Label>
-                <Textarea id="description" {...form.register("description")} />
+                <Textarea id="description" {...form.register("description")} className="min-h-[100px]" />
               </div>
-              <Button type="submit" className="w-full" disabled={createMutation.isPending || updateMutation.isPending}>
-                {createMutation.isPending || updateMutation.isPending ? "Salvando..." : "Salvar"}
-              </Button>
             </form>
+            </ScrollArea>
+            <DialogFooter className="px-6 py-4 border-t bg-muted/20">
+              <Button variant="outline" onClick={() => setIsOpen(false)}>Cancelar</Button>
+              <Button type="submit" form="project-form" disabled={createMutation.isPending || updateMutation.isPending}>
+                {createMutation.isPending || updateMutation.isPending ? "Salvando..." : "Salvar Projeto"}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>
@@ -786,17 +845,76 @@ export default function ProjectsPage({ mode = "client" }: { mode?: "client" | "p
                       )}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={project.active ? "default" : "secondary"}>
-                        {project.active ? "Ativo" : "Inativo"}
-                      </Badge>
+                      {project.status ? (
+                        <Badge variant={
+                          project.status === "ATIVO" ? "default" :
+                          project.status === "INATIVO" ? "secondary" :
+                          "destructive"
+                        }>
+                          {project.status}
+                        </Badge>
+                      ) : (
+                        <Badge variant={project.active ? "default" : "secondary"}>
+                          {project.active ? "Ativo" : "Inativo"}
+                        </Badge>
+                      )}
                     </TableCell>
-                    <TableCell className="text-right space-x-2">
+                    <TableCell className="text-right flex justify-end gap-2 items-center">
                       <Button variant="outline" size="icon" onClick={() => handleManageAnalysts(project)} title="Gerenciar Analistas">
                         <Users className="h-4 w-4" />
                       </Button>
                       <Button variant="outline" size="icon" onClick={() => handleEdit(project)} title="Editar">
                         <Pencil className="h-4 w-4" />
                       </Button>
+                      
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="outline" size="icon" title="Mais Ações">
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          {project.status !== 'ATIVO' && (
+                            <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: 'ATIVO' })}>
+                              <Play className="mr-2 h-4 w-4" /> Reabrir / Ativar
+                            </DropdownMenuItem>
+                          )}
+                          {project.status === 'ATIVO' && (
+                            <>
+                              <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: 'INATIVO' })}>
+                                <Pause className="mr-2 h-4 w-4" /> Inativar
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: 'ENCERRADO' })} className="text-destructive focus:text-destructive">
+                                <XCircle className="mr-2 h-4 w-4" /> Encerrar
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                          {/* Fallback for projects without status set yet (using active flag) */}
+                          {!project.status && project.active && (
+                             <>
+                              <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: 'INATIVO' })}>
+                                <Pause className="mr-2 h-4 w-4" /> Inativar
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: 'ENCERRADO' })} className="text-destructive focus:text-destructive">
+                                <XCircle className="mr-2 h-4 w-4" /> Encerrar
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                          {!project.status && !project.active && (
+                             <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: 'ATIVO' })}>
+                               <Play className="mr-2 h-4 w-4" /> Reabrir / Ativar
+                             </DropdownMenuItem>
+                          )}
+                          
+                          {/* Allow ending inactive projects */}
+                          {project.status === 'INATIVO' && (
+                             <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: 'ENCERRADO' })} className="text-destructive focus:text-destructive">
+                                <XCircle className="mr-2 h-4 w-4" /> Encerrar
+                              </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+
                       <Button variant="destructive" size="icon" onClick={() => handleDelete(project.id)} title="Excluir">
                         <Trash2 className="h-4 w-4" />
                       </Button>

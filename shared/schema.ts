@@ -104,6 +104,7 @@ export const projects = pgTable("projects", {
   supplierHourlyRate: decimal("supplier_hourly_rate", { precision: 10, scale: 2 }), // Valor hora a pagar
   isBillable: boolean("is_billable").default(true).notNull(), // Indica se o projeto fatura
   active: boolean("active").default(true).notNull(),
+  status: text("status").default("ATIVO").notNull(), // ATIVO, INATIVO, ENCERRADO
   billingEmails: text("billing_emails"), // Emails para cobrança (separados por vírgula)
   responsibleContact: text("responsible_contact"), // Contato responsável
   serviceCatalogId: varchar("service_catalog_id").references(() => serviceCatalog.id), // Link ao catálogo
@@ -350,6 +351,7 @@ export const systemContracts = pgTable("system_contracts", {
   startDate: date("start_date").notNull(), // Inicio do Contrato
   endDate: date("end_date"), // Final do Contrato
   active: boolean("active").default(true).notNull(), // Ativo ou não
+  status: text("status").default("ATIVO").notNull(), // ATIVO, INATIVO, ENCERRADO
   billingEmails: text("billing_emails"), // Emails para cobrança (separados por vírgula)
   responsibleContact: text("responsible_contact"), // Contato responsável
   serviceCatalogId: varchar("service_catalog_id").references(() => serviceCatalog.id), // Link ao catálogo

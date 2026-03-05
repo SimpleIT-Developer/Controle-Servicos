@@ -92,10 +92,6 @@ export default function LoginPage() {
               )}
             </Button>
           </form>
-          <div className="mt-4 text-center text-sm text-muted-foreground">
-            <p>Credenciais padrão:</p>
-            <p className="font-mono text-xs">admin@admin.com / Admin@123</p>
-          </div>
         </CardContent>
       </Card>
     </div>

@@ -509,31 +509,99 @@ export async function registerRoutes(
 
   app.get("/api/dashboard/stats", requireAuth, async (req, res) => {
     try {
-      const [contracts, companies, clients, receipts] = await Promise.all([
-        storage.getContracts(),
+      const [projects, systemContracts, companies, clients] = await Promise.all([
+        storage.getProjects(),
+        storage.getSystemContracts(),
         storage.getCompanies(),
         storage.getClients(),
-        storage.getReceipts(),
       ]);
 
-      const activeContracts = contracts.filter((c) => c.status === "active");
-      const currentMonth = new Date().getMonth() + 1;
-      const currentYear = new Date().getFullYear();
-      const openReceipts = receipts.filter((r) => r.refYear === currentYear && r.refMonth === currentMonth && r.status === "draft");
-      const paidReceipts = receipts.filter((r) => r.refYear === currentYear && r.refMonth === currentMonth && (r.status === "paid" || r.status === "transferred"));
-      const monthlyRevenue = paidReceipts.reduce((sum, r) => sum + Number(r.totalAmount), 0);
+      const activeProjects = projects.filter((p) => p.active);
+      const activeSystems = systemContracts.filter((s) => s.active);
 
       res.json({
-        activeContracts: activeContracts.length,
+        activeProjects: activeProjects.length,
+        activeSystems: activeSystems.length,
         totalCompanies: companies.length,
         totalClients: clients.length,
-        openReceipts: openReceipts.length,
-        paidReceipts: paidReceipts.length,
-        monthlyRevenue: monthlyRevenue.toLocaleString("pt-BR", { minimumFractionDigits: 2 }),
       });
     } catch (error) {
       console.error("Dashboard stats error:", error);
       res.status(500).json({ error: "Erro ao buscar estatísticas" });
+    }
+  });
+
+  app.get("/api/dashboard/revenue-chart", requireAuth, async (req, res) => {
+    try {
+      const [receipts, companies, projects, contracts, systemContracts] = await Promise.all([
+        storage.getReceipts(),
+        storage.getCompanies(),
+        storage.getProjects(),
+        storage.getContracts(),
+        storage.getSystemContracts(),
+      ]);
+
+      // Map to find company name easily
+      const companyMap = new Map(companies.map(c => [c.id, c.name]));
+      
+      // Helper to find company ID from receipt
+      const getCompanyId = (receipt: any) => {
+        if (receipt.projectId) {
+          const project = projects.find(p => p.id === receipt.projectId);
+          return project?.companyId;
+        }
+        if (receipt.contractId) {
+          const contract = contracts.find(c => c.id === receipt.contractId);
+          return contract?.companyId;
+        }
+        if (receipt.systemContractId) {
+          const sysContract = systemContracts.find(s => s.id === receipt.systemContractId);
+          return sysContract?.companyId;
+        }
+        return null;
+      };
+
+      // Aggregate data
+      // Structure: { "YYYY-MM": { "Company A": 100, "Company B": 200, "Total": 300, date: DateObj } }
+      const aggregation: Record<string, any> = {};
+
+      // User requested to include all receipts regardless of status (even drafts)
+      // to reflect "expected billing" or simply "what is in receipts"
+      // Filter only to ensure it has an amount
+      const validReceipts = receipts.filter(r => Number(r.amount) > 0);
+
+      validReceipts.forEach(receipt => {
+        const companyId = getCompanyId(receipt);
+        if (!companyId) return;
+        
+        const companyName = companyMap.get(companyId) || "Desconhecida";
+        const key = `${receipt.refYear}-${String(receipt.refMonth).padStart(2, '0')}`;
+        
+        if (!aggregation[key]) {
+          aggregation[key] = {
+            name: `${receipt.refMonth}/${receipt.refYear}`,
+            Total: 0,
+            dateVal: new Date(receipt.refYear, receipt.refMonth - 1, 1).getTime() // For sorting
+          };
+        }
+        
+        const amount = Number(receipt.amount || 0);
+        
+        aggregation[key][companyName] = (aggregation[key][companyName] || 0) + amount;
+        aggregation[key].Total += amount;
+      });
+
+      // Convert to array and sort
+      const chartData = Object.values(aggregation).sort((a, b) => a.dateVal - b.dateVal);
+      
+      // Limit to last 12 months maybe? Or return all.
+      // Let's return all for now, frontend can slice.
+      
+      res.json(chartData);
+
+    } catch (error) {
+      console.error("Dashboard chart error:", error);
+      res.status(500).json({ error: "Erro ao buscar dados do gráfico" });
     }
   });
 
@@ -756,6 +824,16 @@ export async function registerRoutes(
   app.post("/api/system-contracts", requireAuth, async (req, res) => {
     try {
       console.log("[SystemContracts] Creating with body:", req.body);
+      
+      // Sync active state based on status if provided
+      if (req.body.status) {
+        req.body.active = req.body.status === 'ATIVO';
+      } else {
+        // Default to ATIVO if not provided
+        req.body.status = 'ATIVO';
+        req.body.active = true;
+      }
+
       const contract = await storage.createSystemContract(req.body);
       res.status(201).json(contract);
     } catch (error) {
@@ -767,6 +845,12 @@ export async function registerRoutes(
   app.patch("/api/system-contracts/:id", requireAuth, async (req, res) => {
     try {
       console.log(`[SystemContracts] Updating ${req.params.id} with body:`, req.body);
+      
+      // Sync active state based on status if provided
+      if (req.body.status) {
+        req.body.active = req.body.status === 'ATIVO';
+      }
+
       const contract = await storage.updateSystemContract(req.params.id, req.body);
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
       res.json(contract);
@@ -810,6 +894,21 @@ export async function registerRoutes(
 
   app.post("/api/projects", requireAuth, async (req, res) => {
     try {
+      // Sync active state based on status if provided
+      if (req.body.status) {
+        const isAtivo = req.body.status === 'ATIVO';
+        req.body.active = isAtivo;
+        
+        // If not active, disable billing
+        if (!isAtivo) {
+          req.body.isBillable = false;
+        }
+      } else {
+        // Default to ATIVO if not provided
+        req.body.status = 'ATIVO';
+        req.body.active = true;
+      }
+
       const project = await storage.createProject(req.body);
       res.status(201).json(project);
     } catch (error) {
@@ -820,6 +919,17 @@ export async function registerRoutes(
 
   app.patch("/api/projects/:id", requireAuth, async (req, res) => {
     try {
+      // Sync active state based on status if provided
+      if (req.body.status) {
+        const isAtivo = req.body.status === 'ATIVO';
+        req.body.active = isAtivo;
+        
+        // If not active, disable billing
+        if (!isAtivo) {
+          req.body.isBillable = false;
+        }
+      }
+
       const project = await storage.updateProject(req.params.id, req.body);
       if (!project) return res.status(404).json({ error: "Projeto não encontrado" });
       res.json(project);

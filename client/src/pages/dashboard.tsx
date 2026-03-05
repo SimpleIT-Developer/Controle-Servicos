@@ -1,15 +1,20 @@
-import { Building2, FileText, Receipt, TrendingUp, AlertCircle, Users, CheckCircle } from "lucide-react";
+import { Building2, FileText, Layout, Users, Monitor } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 interface DashboardStats {
-  activeContracts: number;
+  activeProjects: number;
+  activeSystems: number;
   totalCompanies: number;
   totalClients: number;
-  openReceipts: number;
-  paidReceipts: number;
-  monthlyRevenue: string;
+}
+
+interface RevenueData {
+  name: string;
+  Total: number;
+  [key: string]: number | string; // For dynamic company names
 }
 
 function StatCard({ 
@@ -17,14 +22,12 @@ function StatCard({
   value, 
   description, 
   icon: Icon, 
-  trend,
   variant = "default" 
 }: { 
   title: string; 
   value: string | number; 
   description?: string; 
   icon: any;
-  trend?: string;
   variant?: "default" | "warning" | "success";
 }) {
   const bgColors = {
@@ -45,12 +48,6 @@ function StatCard({
         <div className="text-2xl font-bold">{value}</div>
         {description && (
           <p className="text-xs text-muted-foreground mt-1">{description}</p>
-        )}
-        {trend && (
-          <div className="flex items-center gap-1 mt-2">
-            <TrendingUp className="h-3 w-3 text-green-500" />
-            <span className="text-xs text-green-500">{trend}</span>
-          </div>
         )}
       </CardContent>
     </Card>
@@ -73,11 +70,68 @@ function StatCardSkeleton() {
 }
 
 export default function DashboardPage() {
-  const { data: stats, isLoading } = useQuery<DashboardStats>({
+  const { data: stats, isLoading: isLoadingStats } = useQuery<DashboardStats>({
     queryKey: ["/api/dashboard/stats"],
   });
 
+  const { data: chartData, isLoading: isLoadingChart } = useQuery<RevenueData[]>({
+    queryKey: ["/api/dashboard/revenue-chart"],
+  });
+
   const currentMonth = new Date().toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+
+  // Extract unique keys (companies) from chart data, excluding 'name', 'Total', 'dateVal'
+  const companyKeys = chartData 
+    ? Array.from(new Set(chartData.flatMap(Object.keys))).filter(k => k !== 'name' && k !== 'Total' && k !== 'dateVal')
+    : [];
+  
+  // Assign colors to companies dynamically or use a palette
+  const colors = [
+    "#2563eb", // blue-600
+    "#16a34a", // green-600
+    "#db2777", // pink-600
+    "#ea580c", // orange-600
+    "#7c3aed", // violet-600
+    "#0891b2", // cyan-600
+    "#ca8a04", // yellow-600
+    "#dc2626", // red-600
+  ];
+
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="bg-popover border rounded-md shadow-md p-3 text-popover-foreground text-sm">
+          <p className="font-semibold mb-2">{label}</p>
+          <div className="space-y-1">
+            {payload.map((entry: any, index: number) => (
+              entry.name !== 'Total' && (
+                <div key={index} className="flex items-center gap-2">
+                  <div 
+                    className="w-2 h-2 rounded-full" 
+                    style={{ backgroundColor: entry.color }} 
+                  />
+                  <span className="text-muted-foreground flex-1">{entry.name}:</span>
+                  <span className="font-medium tabular-nums">
+                    {Number(entry.value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+                </div>
+              )
+            ))}
+            {/* Show Total Summary if multiple companies */}
+            {payload.length > 1 && (
+               <div className="pt-2 mt-2 border-t flex items-center justify-between font-bold">
+                 <span>Total:</span>
+                 <span className="tabular-nums">
+                   {payload.reduce((sum: number, entry: any) => sum + (entry.name !== 'Total' ? Number(entry.value) : 0), 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                 </span>
+               </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
 
   return (
     <div className="space-y-6">
@@ -87,7 +141,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {isLoading ? (
+        {isLoadingStats ? (
           <>
             <StatCardSkeleton />
             <StatCardSkeleton />
@@ -97,44 +151,17 @@ export default function DashboardPage() {
         ) : stats ? (
           <>
             <StatCard
-              title="Receita Mensal"
-              value={`R$ ${stats.monthlyRevenue}`}
-              description="Total recebido no mês"
-              icon={TrendingUp}
-              variant="success"
-            />
-            <StatCard
               title="Contratos Ativos"
-              value={stats.activeContracts}
-              description="Total de contratos vigentes"
+              value={stats.activeProjects}
+              description="Projetos (Clientes, Parcerias)"
               icon={FileText}
             />
             <StatCard
-              title="Recibos em Aberto"
-              value={stats.openReceipts}
-              description="Aguardando pagamento"
-              icon={AlertCircle}
-              variant="warning"
+              title="Sistemas Ativos"
+              value={stats.activeSystems}
+              description="Contratos de Sistemas"
+              icon={Monitor}
             />
-            <StatCard
-              title="Recibos Pagos"
-              value={stats.paidReceipts}
-              description="Pagos neste mês"
-              icon={CheckCircle}
-              variant="success"
-            />
-          </>
-        ) : null}
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {isLoading ? (
-          <>
-            <StatCardSkeleton />
-            <StatCardSkeleton />
-          </>
-        ) : stats ? (
-          <>
             <StatCard
               title="Empresas"
               value={stats.totalCompanies}
@@ -149,6 +176,62 @@ export default function DashboardPage() {
             />
           </>
         ) : null}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-1">
+        <Card className="col-span-1">
+            <CardHeader>
+                <CardTitle>Faturamento Mensal por Empresa</CardTitle>
+                <p className="text-sm text-muted-foreground">Evolução da receita nos últimos meses</p>
+            </CardHeader>
+            <CardContent className="pl-0">
+                {isLoadingChart ? (
+                    <div className="h-[400px] w-full flex items-center justify-center">
+                        <Skeleton className="h-[350px] w-full" />
+                    </div>
+                ) : chartData && chartData.length > 0 ? (
+                    <div className="h-[400px] w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                                <XAxis 
+                                  dataKey="name" 
+                                  stroke="#888888" 
+                                  fontSize={12} 
+                                  tickLine={false} 
+                                  axisLine={false} 
+                                />
+                                <YAxis 
+                                  stroke="#888888" 
+                                  fontSize={12} 
+                                  tickLine={false} 
+                                  axisLine={false}
+                                  tickFormatter={(value) => `R$ ${value}`} 
+                                />
+                                <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
+                                <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                                {companyKeys.map((company, index) => (
+                                    <Bar 
+                                        key={company} 
+                                        dataKey={company} 
+                                        stackId="a" 
+                                        fill={colors[index % colors.length]} 
+                                        radius={index === companyKeys.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+                                        maxBarSize={60}
+                                    />
+                                ))}
+                                {/* Total is implicitly handled by stack, but kept for data consistency if needed elsewhere */}
+                                <Bar dataKey="Total" fill="#000000" hide={true} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                ) : (
+                    <div className="h-[400px] flex items-center justify-center text-muted-foreground">
+                        Nenhum dado de faturamento disponível
+                    </div>
+                )}
+            </CardContent>
+        </Card>
       </div>
     </div>
   );
